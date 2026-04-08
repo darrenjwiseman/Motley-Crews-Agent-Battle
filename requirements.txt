@@ -1,0 +1,3 @@
+# Motley Crews env (4.2+) and tooling
+numpy>=1.26
+pytest>=8.0

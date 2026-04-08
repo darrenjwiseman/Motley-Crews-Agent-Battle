@@ -1,0 +1,338 @@
+# Motley Crews — formal rules spec for simulator implementation
+# Source: Rules_Zine.pdf (16 pp.), OCR + manual review 2026-04-08
+# License (zine): CC BY-SA 4.0 (see PDF p.16)
+
+meta:
+  title: Motley Crews
+  rules_zine_pages: 16
+  zine_version_note: "Arbalist card shows v1.1 MMXXV (p.10)"
+  source_license: CC-BY-SA-4.0
+  ocr_artifacts: rules/ocr_raw/
+  reviewed: true
+  review_notes:
+    - "OCR on cover/title pages is noisy; core rules taken from p.5–12."
+    - "Knight Charge passage damage is 2 to each figure passed through; basic Attack is 3 (p.6)."
+    - "Black Mage Curse example (p.9): both caster and target can die in same resolution."
+    - "Start zones are opposite board edges in diagram (p.5); exact coordinates are scenario-configurable."
+  open_questions:
+    - "Precise cell sets for default Start Zones as coordinates — define in board.start_zone_cells when implementing."
+    - "If multiple optional rules (sliding, water) combine, resolve conflicts per table agreement (p.11)."
+
+enums:
+  class_id:
+    - knight
+    - barbarian
+    - white_mage
+    - black_mage
+    - arbalist
+  team_id:
+    - player_a
+    - player_b
+  terrain_kind:
+    - open
+    - blocked
+    - water
+  action_kind:
+    - none
+    - basic_attack
+    - special
+
+board:
+  width: 8
+  height: 8
+  coordinate_system:
+    description: "Matrix indices (row, col) with origin top-left unless engine chooses otherwise; symmetric rules."
+    origin_corner: top_left
+  start_zones:
+    description: "Each player has a Start Zone on opposite sides of the board (diagram p.5)."
+    placement_order: "Players alternate placing one figure at a time; coin flip picks first placer."
+    first_move: "Player who placed the first figure moves first in-game."
+  terrain:
+    default:
+      kind: blocked
+      blocks_movement: true
+      blocks_occupancy: true
+      blocks_basic_attack_line: true
+      description: "Figures cannot move, occupy, or attack through blocked terrain (p.5)."
+    water_optional:
+      kind: water
+      blocks_movement: true
+      blocks_occupancy: true
+      attack_and_specials_over: true
+      description: "Optional (p.11): cannot move on/through water; may Attack or Special over water if Reach allows."
+
+turn:
+  structure:
+    max_moves_per_turn: 1
+    max_actions_per_turn: 1
+    action_types: [basic_attack, special]
+    different_figures_allowed: true
+    description: "Up to one move and up to one action (Attack or Special); may be different figures (p.5)."
+  no_move_after_action: true
+  movement:
+    style: orthogonal_only
+    description: "Horizontal and/or vertical, up to Move Value; no diagonal unless an Ability says so (p.5)."
+  basic_attack:
+    direction: orthogonal_only
+    description: "Straight line up to Reach Value (p.5)."
+    blocked_by: [terrain, occupied_square]
+    special_actions_line_of_sight:
+      description: "Special Actions are not blocked by figures (yours or opponent) unless specified (p.5)."
+
+scoring:
+  points_per_opponent_death: 1
+  lose_point_on_resurrection: true
+  win_points_threshold: 4
+  win_elimination: true
+  description: "Point when any opponent figure dies (regardless of killer). Lose that point if it is resurrected. Win at 4 points or if opponent controls no figures (p.5)."
+
+resolution:
+  damage_application_order:
+    description: "Apply all damage from an action; then check death. If simultaneous lethal (e.g. Curse), both can die (p.9 example)."
+  death:
+    timing: after_full_action_resolution
+    on_zero_hp: remove_from_board_immediately
+  simultaneous_lethal: allowed
+  stacking_containment: "Not specified; treat as single instance per target unless future errata."
+
+statuses:
+  containment:
+    id: containment
+    name: Conjure Containment
+    source: white_mage_spell
+    blocks_movement: true
+    blocks_basic_attack: true
+    allows_specials_not_requiring_move: true
+    duration:
+      type: enemy_turns
+      amount: 2
+      tick: decrement_at_end_of_each_enemy_turn_or_start
+      description: "Cannot move or attack for 2 enemy turns (p.8); can still use specials that do not require moving."
+    once_per_game: true
+    source_pages: [8]
+
+representation:
+  per_unit_state:
+    - class_id
+    - team_id
+    - controller_team
+    - current_hp
+    - max_starting_hp_reference
+    - position_or_absent
+    - flags_once_per_game  # map ability_id -> bool
+    - active_statuses  # list of {status_id, remaining_enemy_turns?, ...}
+  global_state:
+    - scores_by_team
+    - turn_index
+    - current_player
+    - phase  # move_subphase vs action_subphase if needed
+  ownership:
+    description: "Converted units use controller_team; scoring uses original opponent for point on death (p.8)."
+    converted_figure_death: "Opponent gets the point when a converted figure dies (p.8)."
+
+classes:
+  knight:
+    display_name: Knight
+    stats:
+      move: 4
+      reach: 1
+      attack_damage: 3
+    basic_attack:
+      kind: melee_adjacent_orthogonal
+      damage: 3
+    abilities: []
+    specials:
+      - id: charge
+        name: Charge!
+        replaces_attack: true
+        once_per_turn_limit: "Cannot Charge if any piece has already moved this turn (p.6)."
+        movement:
+          distance_max: 4
+          direction: straight_line_orthogonal
+          pass_through_figures: true
+          pass_through_terrain: false
+          landing_must_be_unoccupied: true
+        effects:
+          - op: deal_damage
+            to: each_figure_whose_square_entered_excluding_landing
+            amount: 2
+            includes_all_teams: true
+        source_pages: [6]
+
+  barbarian:
+    display_name: Barbarian
+    stats:
+      move: 3
+      reach: 1
+      attack_damage: 4
+    basic_attack:
+      kind: melee_adjacent_orthogonal
+      damage: 4
+    abilities:
+      - id: fear_of_the_occult
+        name: Fear of the Occult
+        description: "Takes one extra damage when dealt damage by a Mage (p.7)."
+        extra_damage_when_source_class_in: [white_mage, black_mage]
+        extra_damage: 1
+    specials: []
+
+  white_mage:
+    display_name: White Mage
+    stats:
+      move: 2
+      reach: 2
+      attack_damage: 1
+    basic_attack:
+      kind: ranged_orthogonal_line
+      damage: 1
+      reach: 2
+    specials:
+      - id: convert
+        name: Convert
+        targeting: enemy_single_in_reach
+        reach: 2
+        line_of_sight: orthogonally_as_basic
+        condition:
+          target_current_hp_lte: 2
+        effects:
+          - op: change_controller
+            new_controller: caster_team
+        source_pages: [8]
+      - id: heal
+        name: Heal
+        targeting: friendly_single_in_reach_excluding_self
+        reach: 2
+        effects:
+          - op: heal
+            amount_max: 3
+            cap_to_starting_max_hp: true
+        source_pages: [8]
+      - id: conjure_containment
+        name: Conjure Containment
+        targeting: enemy_in_reach
+        reach: 2
+        limits:
+          once_per_game: true
+        effects:
+          - op: apply_status
+            status_id: containment
+        source_pages: [8]
+
+  black_mage:
+    display_name: Black Mage
+    stats:
+      move: 2
+      reach: 2
+      attack_damage: 1
+    basic_attack:
+      kind: ranged_orthogonal_line
+      damage: 1
+      reach: 2
+    specials:
+      - id: curse
+        name: Curse
+        targeting: enemy_single_in_reach
+        reach: 2
+        parameter_x:
+          description: "X damage to self; X+1 to target (p.9)."
+        effects:
+          - op: deal_damage
+            to: self
+            amount: X
+          - op: deal_damage
+            to: target
+            amount: X_plus_1
+        source_pages: [9]
+      - id: magic_bomb
+        name: Magic Bomb
+        targeting: any_board_square_in_reach
+        reach: 2
+        limits:
+          once_per_game: true
+        area:
+          center: target_square
+          includes_center: true
+          orthogonal_adjacent: true
+        effects:
+          - op: deal_damage
+            to: all_figures_in_area
+            amount: 2
+        source_pages: [9]
+      - id: animate_dead
+        name: Animate Dead
+        costs:
+          self_damage: 1
+        targeting: one_dead_figure_from_own_crew
+        effects:
+          - op: place_unit_in_owner_start_zone
+            hp: 2
+          - op: may_be_healed_up_to_starting_max_life
+        source_pages: [9]
+
+  arbalist:
+    display_name: Arbalist
+    stats:
+      move: 2
+      reach: 3
+      attack_damage: 2
+    abilities:
+      - id: traversal
+        name: Traversal
+        description: "May move and attack diagonally (p.10)."
+        allows_diagonal_move: true
+        allows_diagonal_basic_attack: true
+      - id: careful_aim
+        name: Careful Aim
+        description: "Regular attack deals more damage if the Arbalist has not moved this turn (p.10)."
+        attack_damage_if_not_moved: 3
+        does_not_apply_to: long_eye
+    basic_attack:
+      kind: ranged_with_traversal
+      damage: 2
+      damage_if_not_moved: 3
+      reach: 3
+      long_eye_is_separate: true
+    specials:
+      - id: long_eye
+        name: Long Eye
+        replaces_attack: true
+        damage: 1
+        range: unlimited
+        direction: straight_line_any_of_8
+        blocked_by_figures: true
+        blocked_by_terrain: true
+        description: "Unlimited reach in a straight line (including diagonal); 1 damage; cannot attack through figures (p.10)."
+        source_pages: [10]
+
+optional_rules:
+  sliding_attack:
+    source_pages: [11]
+    description: "Optional: figure hit by a regular attack slides in a straight line (incl. diagonal) until blocked; if hit by sliding figure, takes 1 damage."
+  alternate_maps:
+    source_pages: [11]
+    description: "Rough terrain, mountain pass, cave, maze, river crossing layouts; house rules if needed."
+  scenarios:
+    source_pages: [12]
+    items:
+      - name: Ringmaker
+        win: occupy_two_diagonal_corners_for_one_turn
+      - name: Ward
+        win: kill_enemy_ward_first
+        notes: "Converting enemy Ward does not win (p.12)."
+      - name: Dungeon_Crawl
+        win: white_mage_reaches_opponent_back_row_of_start_zone
+      - name: River_race
+        win: three_figures_across_river_simultaneous_turn_on_far_side
+      - name: Mountain_pass_crossing
+        win: must_cross_center_four_spaces_for_river_scenario_variant
+
+optional_achievements:
+  source_pages: [14]
+  description: "Challenges for humans; not required for core engine."
+
+engine_notes:
+  action_space_alignment: "(figure_id, move_target | pass, action_type, action_target | params)"
+  randomness: "Placement order uses coin flip; core rules otherwise deterministic given player choices."
+  estimated_duration_minutes: [30, 45]
+  publisher_links:
+    - https://underscore-nubmark.itch.io/

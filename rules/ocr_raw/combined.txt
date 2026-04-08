@@ -1,0 +1,619 @@
+
+========================================================================
+-- PAGE 1 of 16 --
+========================================================================
+
+VY ® e \/ :
+PUTA A We Ta aires
+mh ( wn te 55 | oO
+S77 ye " ie
+Qf \
+4 e oe = ‘z=. ] es y 4
+if a+ Ca | >
+<A ae 7 ee
+GRID-BASED TACTICAL FANTASY TABLETOP GAME |= —
+
+========================================================================
+-- PAGE 2 of 16 --
+========================================================================
+
+bam.» ae A . . “ae
+B. TOS Ee : i * 5 SYP f- t
+\ P ra 4 i. f \ ‘ a mY aoe i] ii
+\ ; , 4 20 iF Ts
+f = ~
+Sn
+ie
+his y- “ Seu CYS ae
+LS "7 TA ne, , _ a fi 42
+5 J Sieeeemeeiersuee eee <
+—_ oo rd a ; Wy . ¢
+Se ere Meg at Ba
+Bf ts Ly ~E
+VER)
+Ce Noe eR ge
+el A ure \ \ X
+; “ A wc: serie “ = .\ Si Md x Ea
+ee Eee ONS
+
+========================================================================
+-- PAGE 3 of 16 --
+========================================================================
+
+1. IntroductiOn....050 aot eee eee
+LL Core Rulls........::c.cusescts sos es¢ gies ie aa
+TIT. Classes................::cssccecccscececcecccesssccccnssssceves
+Barbariani..........::ccsecscescecearee+s cee
+White Mage... cece csessecrecneeneO
+Black Mag....ccsccccssscsscaccsometet ca
+Arbalist............cc:ccsccccceccssssscsceceeeeseseee®
+DIVE Ter rain.........sccccssenececeeseesenesniieipifenss Uoncesaghcte®)
+V. Scenarios and alt. win conditions.............10
+VI. A few words about the hobby..................11
+4 . 7
+; ges ra og )
+ee Peres
+ee: 2 es a: of Motley Crews I wanted to make a simple game so that I had something to play with all the weird and wonderful
+miniatures my friends had made
+
+========================================================================
+-- PAGE 4 of 16 --
+========================================================================
+
+ae ee
+‘ 5 . ‘-
+\ VG : .
+: ~ api = | LOAKO : = ;
+< DOIN ie) Z.
+dS ° ra) °
+YN 5
+xG -
+7 yk
+Introduction ~~
+The tower of the Mad Mage has fallen! Light shines again upon a land that for hundreds of years
+was covered in shadow. The Mad Mages treasure is there for the taking, and adventurers from all
+the realms are fighting to be the first to reach tt. Qo
+NEGRO Se soe > a nn ya —® LN ee
+MINS is ES ae © éh & MY RE. Ieaypege
+Motley Crews is a grid-based, tactical, fantasy tabletop game for two players, that can be
+played with whatever miniatures, figures or tokens you like! All you need is five figures per
+player, a chessboard (or similar 8x8 grid), the cards and the rules.
+My goal when coming up with the game was to make something that is easy to learn, quick
+to set up and fun to play. This zine will tell you everything you need to know to get started,
+and more!
+For as long as anyone can remember, half the land of Loot has been under the control of the evil
+Mad Mage. Now he is gone and his dark keep has crumbled to the ground. The inhabitants of Loot
+are swarming to the Mages domain to reclaim their land and get a share of his treasure.
+LBs, The qPeople of Loot
+22)
+Lop /
+. . Celestians AHanteans Humans
+Since their castle fell from the sky a : The humans of Loot wage a
+When the Celestian castle crashed : : ‘
+hundred years ago, the radiant raging battle for survival against
+; on Loot, the earthquake that 3 4 :
+Celestians have ruled over the : nature, everything that inhabits
+followed sunk the Mermaids port :
+lands untouched by the Mad Mage. : ; it, and each other. Ever so
+; city of Atlantis beneath the waves.
+Unable to get back to their home adaptable, humans can be found
+: Without easy access to trade the : an ;
+among the stars and with resources : : in the cities of the Celestians and
+ee ii Atlantean Naval Empire lost its
+dwindling, their grip on the people ; ; aboard Atlantean galleys, as well se
+é ‘ : biggest source of income. Once rulers aes : ee
+of Loot is getting weaker. Will : as in tribes of their own. Some
+an of the sea, the flotilla has shrunken d a
+seizing the Mad Mages treasure be : have even taken up residencein
+enough for them to stay in power? to a handful of ships. More and the Mad Mage’ domain ee |
+: more of the Mermaids turn to piracy & , ie le
+or mercenary work with every 4 Daten” 3
+passing year. Will they ever regain ee oN ee
+their former glory? Saas)
+
+========================================================================
+-- PAGE 5 of 16 --
+========================================================================
+
+oe se
+Each player controls five figures, one of each class: KNIGHT, BARBARIAN, oe
+WHITE MAGE, BLACK MAGE and ARBALIST ‘
+At the start of the game players take turns placing their figures in their Start Zone ae
+(Flip a coin to decide who goes first). The player that placed the first figure also gets ,
+to move first.
+Player A Z aM WA. YZ 4 These spaces are terrain. Figures
+A ahd V7 tel / Je ' .
+Start Zone A 0. G, 7) | can't move or perform actions on
+q Eg " or through these spaces. Read
+eon more about alternative terrain
+ry at oe layouts on page 10
+an 7 JAG SNE,
+Player B 4 W:, Vhs 4 WL,
+Start Zone CAMA NAMA
+During your turn you can make up to one move and perform up to one action (Attack or
+Special Action). It does not need to be the same figure that moves and performs the
+action. You can't move a figure after you have performed an action.
+Figures can move any number of spaces up to its Move Value. Figures move
+horizontally and/or vertically. Figures Attack horizontally or vertically in a straight
+line up to its Reach Value. Figures cannot occupy, move or attack through terrain or a
+space that is occupied by another figure. Special Actions are not blocked by other
+figures, neither yours nor your opponents, unless otherwise specified.
+Each figure has a corresponding card wis e,] , ee @G
+describing its stats and any Abilities or Ds Avbalist
+f : : oD
+Special Actions it has. La) Dame:
+Move: 2
+Special Actions are actions you can perform ‘ Wttachk: 9
+instead of attacking, for example Spells. K each: 3
+es —e Ce tng ee
+An Ability is a permanently active effect. For Pater line (eclading ct Mth untied
+example, the Arbalist can move and attack z (aay other figure *
+diagonally thanks to its Traversal-ability. parti im Thabane a p
+More damage if it esn't rhe ular attack deals
+aes aie ed this turn
+diagonally, alist can move and attack
+If a figure is attacked it loses life (takes damage) equal to the Attack Value of the
+‘attacking figure. Place dice or tokens on the corresponding card to indicate damage
+ona figure. When a figure has o life it immediately dies and is removed from the
+board. When an opponents figure dies (regardless of who killed it) you get a point. If
+the figure is resurrected you lose that point. You win if you have 4 points or your
+opponent controls no figures.
+aig Good luck! ,
+M
+
+========================================================================
+-- PAGE 6 of 16 --
+========================================================================
+
+1 Se ae
+Wig '
+SE hinight @
+L 4 WN da
+y/ he > Jame: )
+, rs Special Action
+tye! - If you haven’
+y, you ea move the Knighe we epee re
+Pie Straight line (not dia onal eka
+ly through other fare: hl ‘ane tone
+A usin,
+iy figure it moves through takes 2 damage Any
+Solstar is a knight of proud Celestian heritage. Fiercely
+. 5 z MOTLEY CREWS vi Méxxy
+devoted to proving his mettle as a brave knight, he has
+escaped from a cushy life as nobility to find adventure,
+do honorable deeds and slay evil creatures.
+Bt 3 ie
+With its Move 4 the Knight is the fastest ..and Attack! The Knight has Reach1, soit Alternatively, if you haven't moved any
+of all the figures. In one turn it can move can Attack any figure within one space of piece this turn, you can use the Knights
+to any of these spaces. itself. Special Action; Charge! The Knight runs
+up to 4 spaces in a straight line and deals 2
+For example, you may choose to approach The blow from it’s sharp sword deals 3 damage to any figure it passes through
+the enemy Arbalist... damage to the enemy. (including your own).
+When using Charge! the Knight can move
+through figures, but not terrain. It must
+land on an already unoccupied space.
+
+========================================================================
+-- PAGE 7 of 16 --
+========================================================================
+
+Py
+¢ J =>) >
+1 YQ 6 es ey] | Harbanan
+] az wc i x . at
+G a iu 4 \ . ~.,
+A ww ES & i aS ame: CANELBANE
+( : j ‘
+ee | N E 7 7 .
+( Ne Mme >»)
+9. Me J , .
+Ce eer) Le Attach: 4
+“OQ BES
+RA ‘< Ability
+Fear of the Occult - The Barbarian takes one
+extra damage when dealt damage by a Mage.
+Camelbane is the strongest warrior in her tribe.
+She has joined up with a strange group of MOTLEY CREWS vl MMXXV
+adventurers, hoping to find treasure that could buy
+food and water for her people.
+ety ay as ay %y ae | ae fee Bais
+f oor ee oe oe Cet ae ey ee = hee
+2 7 ee sue
+ae =| eh 9
+While not as swift footed as the Knight, ...and she really packs a punch! Her But watch out for the Mages retaliation!
+the Barbarian can still move up to 3 Attack deals 4 damage within a one space The Barbarian has the Fear of the Occult-
+spaces... distance. ability, so she suffers an extra point of
+damage from the Mages Spells and Attacks.
+
+========================================================================
+-- PAGE 8 of 16 --
+========================================================================
+
+@ t | : f
+, \ ey ee
+f q y e
+"\J , q s) * * © pitty) s t Mm
+J o J
+d > ” pie .
+*) hee SF e . lt
+iO . att wp = 2 ae ej aft Name: CJSrmiju
+a ee . oo} (} (
+pie k b ~
+"s) - y NX ie mM
+4 os a 8
+~," ® > eo se, | k .
+7 a | a) © tack: 1
+cele
+ey
+[ y ieed K .
+"2 2
+~».s » P ;
+ad Special Acti
+- ~ ecial Action
+/} > Spelis- P .
+® Convert - You take permanent control of an enemy
+figure with 2 or less life within the White Mages reach.
+ue Ore figure within the White Mages reach gains up
+bs a, i A "mae a pee sere eee its starting life total.
+— — ~ c itself.
+”Wormius is just regular human learning sacred magic arts. Watte Bc eons, within he
+. a = or use a Speci: ction
+Strange? Us- We means, ub, I- I is not strange. Ha-ha-ha. awe moving for 2 turns. Can only be used once per
+Definitely not ancient hivemind. Silly human, very funny! MOTLEY CREWS vil.) MMxxv
+Ha-ha-ha-!”
+« Ja oe
+| | | ees F The White Mage is slow and can only move 2 . i ¢ Gene e
+noe 2 Cot spaces in a turn. ey ae mings
+2a 7 eX. ‘at With Reach 2, they can Attack a figure 2 spaces away. P| | je Se. ae
+as ee ; And while they don’t deal much damage, they have | Pe ieee
+ks is » other tricks up their sleeves. ae + L | jag
+‘ | | i ae AW If the enemy figure has 2 or less life, it can be J | Ld Weed
+é \ — 4 converted into a friendly figure with the Convert- /\ den
+A: \ ad a id be spell. Congratulations, your crew has a new member! \ AN —<~y)
+¢ ] a ae 4 Treat the converted figure as your own for the JS it cae px ae
+as antes <r ae a : rest of the game (or until it gets converted back). If : san tay j
+3 a r tay) ; 5 EPs | the converted figure dies your opponent gets a point. Be Os Be
+rae Bours Ht ; Your Black Mage can use its Animate Dead-action to J) ] se WO ge eg eee
+eee: Beas pen resurrect the dead figure. bese tee Kc bagi, ail i
+pasar tee Using the Heal-spell, the White Mage can Ai ot ie
+j 4 i ¢ ea aus restore up to 3 life to a figure. The healed figure ved 2
+4 4 | can't have more life than it had at the start of the 4 1 Oi
+3am | | a sz fe, ¥ 29] game. The White Mage cannot Heal itself. 7 fi fos:
+ae "i tH A . Look out, the Knight is coming in for an attack! wR LAW |
+: [d\ea Using the Conjure Containment-spell, i Rie A ALM
+. it cee { | theWhite Mage can stop the Knight from /* ra }. :
+; 4 | =~) - moving or attacking for 2 enemy turns. Ws Ny ie 4 a?) y 5
+EDIE Nale gic
+Gi 2 es ee A trapped figure can still use Special Actions that J = f | Ae tao ;
+als tf + > “ake 7 don't require moving, such as Spells. pry ea
+Red a a ee a as is This spell can only be used once per game, so ew <3 ra de
+bin esau are abet | don’t waste it! FS Pe, rapins baa) Soa
+
+========================================================================
+-- PAGE 9 of 16 --
+========================================================================
+
+H ~,
+\
+e . 5
+5 pe | Slack Mage
+a e XK Es ‘
+© Name:
+oD . Dj
+| sOde: 2 :
+| \ ¥
+| a
+.
+ttach: 1
+| Heach::
+each: 2
+Special Acti
+x <ctions
+Spelis -
+2 Magic Bomb Place the bomb
+es
+orthogonally Emery figure occupying tha “ise within the Black
+once per game. Poaneete cakes 2 damage. Can only bas neg
+Qe UUSE -The Black Mage takes X ¢.
+within the Black Mages reach tales Xt hci enemy figure
+@® Animate Dead -The lamage.
+; ; one of your dead flies oa Mage takes | damage. Resurrect
+What happens when a human dabbles with dark forces beyond their Your Start Zone. It has 2 life.» °" 2” UNoccupied space jn
+comprehension? When they burrow deep in elden texts that should have die cia,
+remain unread? Billy has suffered the consequences of their curiosity... Se TEEXKY
+Horribly disfigured by some ancient curse, they have set out on an epic
+quest to uncover the secrets of the black magic arts. A quest that won't end
+until their death, and perhaps not even then...
+as EF ms] pee) G Sie
+ae | | Cee Pa Just like the White Mage, the Black Mage Be. +e
+
+i r se Hy can move 2 spaces, reach 2 spaces away and Rs oe
+
+jf, ae attack for 1 damage. Na)
+4 = 4 a. "a
+pe :
+par ia iG \ If you want to deal more damage the Black Mage can use the (
+“hy a 5 N Curse-spell. The Black Mage takes X damage in order to 4 iy) AW
+wy, a4 ex | M4 deal X+1 damage to the enemy. In this case it spends 4 life to J sl ge =
+way P si ' at Cr deal 5 damage. It is attacking the Barbarian, who takes 1 ah, | ae eH i
+E Ls WN zs Ms Bey extra damage from Mages. Both figures end up dead! oer > 5 abs ae
+A Me < jake
+Doo ™ x
+
+Ae + BEB a pa 1
+oe ta coat La
+= NS No Remember! Spells are Special Actions and are Riot reas te eee
+kerf ae le fee lhe Fae not blocked by other figures, neither yours nor a nae vhs eee a e el a
+oe a Aa apa se Te Saale your opponents, unless otherwise stated! iano —_-—_———-
+
+Pe ee da ae If you have to deal with a lot of enemies at once, you can use Si oot ae é B
+é : fat Sy the Magic Bomb. The bomb can be detonated on any space ~ x a bs > — =
+I 7 | within the Black Mages reach, including on the same space as a Wid one ween ok
+wy the Black Mage itself. Every figure occupying the same space abs =a Sf
+94 as the bomb, or one orthogonally adjacent to it, takes 2 ox He
+damage. This includes the figures in your crew and even the ee 4 5
+3 may Black Mage itself. The Magic Bomb can only be used once SY Ae
+Aap (x \\i per game. : AT ‘Sere = ed
+ad Be | heal If a figure on your crew is dead the Black Mage can take 1 MA } ze ba A daa
+ae Shek ‘ a damage to use the Animate Dead-spell and bring it back. ine S's sb =f ‘
+
+? we f°) Is Bs pe The resurrected figure is placed in your Start Zone. It has 2 J ee A? es, <a
+ae mW, Fa ey to life, but can be healed back to the life value it had at the start ee a ee RAK a
+“mn eee et ae
+nal 2 y ae = fee a ~ = = - — —
+
+========================================================================
+-- PAGE 10 of 16 --
+========================================================================
+
+“Cee
+—— <A
+— a.
+aC / |
+ii: </ SH Arbalist @
+% Ce . ga
+UG <> >> \)
+Mr, re eer ~~ ae Mame: H Garsatpo_
+| Ze : Uy [FBS
+(Cre
+iz Move: 2
+: QWtfach: 2
+> St Keach: 3
+Special Action
+Che Long £ye ~ The Arbalist attacks with unlimited
+reach in a straight line (including diagonally). This attack
+deals | damage. It cannot attack through other figures.
+‘ Abilities
+Careful Aim -The Arbalists regular attack deals
+| more damage if it hasn’t moved this turn
+Traversal -The Arbalist can move and attack
+diagonally.
+Ex-naval gunner, Hectore Garbaldo, at your service! After being MOTLEY CREWS v.1.1 MMXXV
+discharged from the once proud and glorious (and profitable)
+Atlantean Flotilla, Garbaldo has had to take up work as a
+mercenary. For the right price he'll lend his blunderbuss to almost
+anyone- even to a scruffy crew such as this one.
+e Bs ks”
+is Le) ie CL
+A\ a Pay eal mn 5
+Bele Bx pa ue &:
+mode i i ae Le
+ba de ae o mer ae a ie
+The Arbalist can only move 2 spaces- but the Usually the Arbalist can deal 2 damage If the Arbalist hasn’t moved the same turn that
+Traversal-ability allows him to both move within 3 spaces. His Special Action he is attacking, he has time to line up the
+and attack diagonally! The Long Eye allows him to fire a perfect shot, thanks to the Careful Aim-
+shot with unlimited reach in a straight ability. His regular attack now deals 3 damage
+orthogonal or diagonal line. The Long inetea ep
+Eye deals 1 damage. This ability does not affect the damage of The
+Long Eye.
+
+========================================================================
+-- PAGE 11 of 16 --
+========================================================================
+
+Ps | ea! c5J Vp, “i =
+eae AOR
+The standard board layout features only two terrain pieces. If you want a change
+of scenery, try one of these layouts.
+Yee Rough Cerrain Foe 7 2) Mountain iPass
+yaa 1S, Se Sie. fi es’ eee =” 6
+Bey ae igs /* w Similar to the standard 2 ef} The narrow mountain passage forces
+aes PREQER ©] board layout, but with a f Jes the crews to come to blows in the
+ee Ba cc: Sh a By, couple more obstacles to [7 i a middle of the board.
+ill. ae manouver aound. AWG oT LAT ; it.
+ee ie oat Yau (Ay Alt. win-condition: See next page!
+Ghuli Cave a 4 | Mase of Shah Mat
+Maps do not need to be aoe " ! is (2 The crews clash in a frozen labyrinth.
+oi es AS symmetrical. Here one i Se peal
+eg: crew is ambushing the | 4} | Optional rule: A figure hit by a
+ag } other as they rest in a I ! | regular attack will slide back in a
+es Ee gloomy cave... =| I “Tk "| 1 straight line (incl. diagonally) from the
+mo Tes t am | inal attacking figure until it hits a wall or
+od = et other figure. A figure hit by a sliding
+4 Be | oa uve: figure takes 1 damage.
++) |] forest River Crossing
+ee ‘ai: . On this map the battle is raging around the two fords where the figures can
+a = e: ; cross the river.
+ae es | ; z ay f iy a This layout features an additional type of terrain:
+BL fe $ SSS Bs Water - Figures can not move on or through water, but they can Attack or perform Special
+a as + Actions over the water if they have enough Reach
+si vs
+; Alt. win-condition: See next page!
+s ‘
+2 4 A Gees, oe
+ee oo =a, ER ll, TM ~ “ae ee Ds
+The examples of board layouts presented here are by no means
+the only acceptable layouts. It is my wish that you, the players and hobbyists,
+experiment and come up with layouts of your own. If the rules as written clash with :
+how you think the terrain you build should function, feel free to change them, or if
+come up with new ones. As long as you and your opponent agree on their function,
+our imagination is the only limit! saa gti: ;
+y ag y m
+
+========================================================================
+-- PAGE 12 of 16 --
+========================================================================
+
+veae y ets J ; * ~ ; eg eee, Be / f
+|e ) sey VW
+Jim 3h . Scenarios based on ideas by AENock ot SG op eee oe
+A standard game of Motley Crews is won when you get 4 points or when your — re :
+opponent controls no figures. Presented here are some scenarios with alternate ee Bt die Be
+win-conditions you can use in addition to the standard one if you want to cf a
+change up the gameplay! ge:
+< Ringmaker a
+ja The players must simultaneously occupy two diagonally opposite corner spaces with any .
+eae _ figures for 1 turn (the figures must start and end their turn on that space). The first player A
+aa . to do so immediately wins the game. "8
+“3 Before the game starts, each player secretly chooses one of their figures as the “Ward”.
+The player who first kills the enemy Ward immediately wins the game. Converting the
+enemy Ward does not result in a win.
+‘a
+a. Oungeon Cravl ‘
+st This scenario can be played on the MAZE OF SHAH MAT board from the previous zs
+An page, or any board with a similar layout.
+The players start with their White Mages anywhere on the back row of their Start Zones.
+The first player to move their White Mage across the board and into the back row of the
+opponents Start Zone wins the game.
+This scenario can be played on the FOREST RIVER CROSSING or MOUNTAIN
+ee PASS board from the previous page, or any board with a similar layout.
+ees i “ The first player to successfully move three figures over the river wins the game. To win am
+= om the figures must simultaneously spend 1 turn on the opponents side of the river (the . x
+: an figures must start and end their turn on that space). If you play with the FOREST Seah ae
+a ba RIVER CROSSING layout you can’t place figures in the part of your Start Zone that is ee
+a" Pat 5; on your opponents side of the river. eae -
+bs eee __ Wiscuss with your opponent beforehand whether or not you should be allowed to ere a
+eo us Ake surrect dead figu res on their side of the river. Both versions of the scenario works, but eg Shas. oe
+aes = do a hia 2s $ leads to different styles of play) Fe. ee Sine.
+f you play wi th the MOUNTAIN PASS layout figures must cross the entirety of t ne Boe :
+bite ass (the centre four spaces) before counting as having passed. as
+
+========================================================================
+-- PAGE 13 of 16 --
+========================================================================
+
+Lous «(few words =
+rm about the Hobby —V ©
+At the heart of Motley Crews is the love of creativity- crafting,
+sculpting, painting, drawing, designing, and the many other
+aspects that are part of the hobby. If the game can inspire
+people to pick up a paintbrush or sculpting tool-
+then it’s a success!
+Now, I have made “official” miniatures... But you don’t need
+them to play the game! You can make your own miniatures
+from scratch. You can kitbash them. You can use miniatures
+from other games. You can draw your own characters and
+make paper-minis! The whole reason I made the game in the
+first place was so that I could play with the weird and
+wonderful minis my friends had made. If you have miniatures
+you love but never get to use I hope this game can give you a
+reason to dust them off and play with them.
+However you do it, my hope is that you will make the Motley
+Crews you play something you truly enjoy, and that means you
+have the freedom to change the board, minis, and even the
+rules to whatever will make your personal tabletop adventure
+the best it can be!
+@
+Good luck fh Fe , las \
+and most importantly Vive (—®)
+HAVEFUN! {Qevalnany (3
+, 5) Ifred ban ~. ohare fe Lf
+e Ay oe Ye “ ats ,
+<i, é (Cnubmark) a aN
+
+========================================================================
+-- PAGE 14 of 16 --
+========================================================================
+
+“h ft Whe
+“A COLMILINS 2
+<i f We
+If you want an additional challenge, try to
+complete some of these tasks during a game!
+rs Master of the Cloth
+=e] Convert the enemy White Mage
+rs Pacifist
+ee| Convert the entire enemy Crew
+(| Mecromancer
+(SO) Resurrect 3 figures with the Animate Dead-Spell
+ea Aakablam!
+(S| Kill 2 enemy figures with one Magic Bomb
+S| Champion of the Joust
+A®| Kill the enemy Knight with Charge!
+ced Vinebreaker
+Avy| Damage 3 enemy figures with one Charge!
+A Khabdophobe
+faves Kill both enemy Mages with the Barbarian Q >
+A Juggernaut LA 2
+fawn Enter the enemy Start Zone, damage an enemy and sg
+Ad
+make it back to your own Start Zone without dying 4
+E4 Gharpshooter
+72)| Kill an enemy figure using only the Long Eye-Special yo
+Action ae
+The Dery Long Lye ey
+72)| Kill an enemy figure from 8 spaces away a> SS i
+Slugfest STN =k
+‘Win a game without using any Special Actions we ah—
+Domination i Q\
+W/m °
+, Win a game with your entire crew alive at the end of TF, )
+the game WZ Lp "
+% mm
+
+========================================================================
+-- PAGE 15 of 16 --
+========================================================================
+
+~ SE! |
+porn As ~ _—— 14 ‘ k 4
+AMY, a, NN ] \ qi a} F y.
+‘ aos 4 (Se a $ a
+{ - | _ ON, res ic: a? “ff ri
+at Le AEG
+ay ‘
+hs uae
+> ’ . Ave mihi hee - W a . >
+= 7 ; % “| x¢ a) cS *e my a> i } : y: J
+a +0 ~ a, ee _ tar \\ .
+$/7y Ae of Ni Ze My
+9S Ref Ln a Bi. eS Ne #")
+as a tanned” Nig cx SNR
+SN | Siliaet
+pe part - 5. we “I * ve h as
+Eon oe WANTED .
+Oe rN NE eh,
+eA { - > i yay . : oO
+A & | \ ¢ A 2 &
+.  / ee GO | ‘ , a . Songs
+° , » \ bass oe \ Wi ' . P
+. Ps | Lae
+wee | 1: ElBazardeHorus - 1 and III: Emma Belotti- IV and VI: Zacc French-Coffee - V: Ames McCallaghan
+me Alternate portaits (on the WANTED -posters) by ElBazardeHorus
+
+========================================================================
+-- PAGE 16 of 16 --
+========================================================================
+
+V5). la
+~~ . =a =<
+4 SF 7 ie yy i ‘ wf, ° ®
+
+| Bel) Vig a NY
+Motley Crews is a grid-based, tactical, fantasy tabletop game for
+two players, that can be played on a regular 8x8 chessboard with
+any miniatures you like! It’s easy to learn and quick to get started.
+This booklet contains everything you need to know play the game,
+and more.
+
+For official miniatures, cards and more visit:
+https://underscore-nubmark.itch.io/
+https://www.youtube.com/@_nubmark
+Want to find other Motley Crews-players? Join us on Discord!
+
+& Time: 30-45 min
+TS £2 2 players
+£2 Fe es ree ie
+ee AO ee — i,
+Made by _nubmark/Alfred Blomberg
+Rules are licensed under CC BY-SA 4.0 2025

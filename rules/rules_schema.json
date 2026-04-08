@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://motley-crews.local/rules_spec.schema.json",
+  "title": "Motley Crews rules_spec",
+  "type": "object",
+  "required": ["meta", "enums", "board", "turn", "scoring", "resolution", "statuses", "representation", "classes"],
+  "additionalProperties": true,
+  "properties": {
+    "meta": { "type": "object" },
+    "enums": {
+      "type": "object",
+      "required": ["class_id", "team_id"],
+      "properties": {
+        "class_id": { "type": "array", "items": { "type": "string" } },
+        "team_id": { "type": "array", "items": { "type": "string" } },
+        "terrain_kind": { "type": "array", "items": { "type": "string" } },
+        "action_kind": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "board": {
+      "type": "object",
+      "required": ["width", "height"],
+      "properties": {
+        "width": { "type": "integer", "minimum": 1 },
+        "height": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "turn": { "type": "object" },
+    "scoring": {
+      "type": "object",
+      "required": ["win_points_threshold"],
+      "properties": {
+        "win_points_threshold": { "type": "integer" },
+        "points_per_opponent_death": { "type": "integer" },
+        "lose_point_on_resurrection": { "type": "boolean" },
+        "win_elimination": { "type": "boolean" }
+      }
+    },
+    "resolution": { "type": "object" },
+    "statuses": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["id"],
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "duration": { "type": "object" }
+        }
+      }
+    },
+    "representation": { "type": "object" },
+    "classes": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "object",
+        "required": ["display_name", "stats"],
+        "properties": {
+          "display_name": { "type": "string" },
+          "stats": { "type": "object" },
+          "basic_attack": { "type": "object" },
+          "abilities": { "type": "array" },
+          "specials": { "type": "array" }
+        }
+      }
+    },
+    "optional_rules": { "type": "object" },
+    "optional_achievements": { "type": "object" },
+    "engine_notes": { "type": "object" }
+  }
+}

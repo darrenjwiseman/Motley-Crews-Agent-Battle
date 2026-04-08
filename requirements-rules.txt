@@ -1,0 +1,15 @@
+# Motley Crews — rules extraction & formalization (Step 4.1)
+#
+# Setup:
+#   python3 -m venv .venv
+#   source .venv/bin/activate   # or .venv\Scripts\activate on Windows
+#   pip install -r requirements-rules.txt
+#
+# macOS system deps (install once):
+#   brew install tesseract
+# PyMuPDF embeds MuPDF — no Poppler required for rendering PDF pages to images.
+PyMuPDF==1.24.14
+pytesseract==0.3.13
+Pillow==10.4.0
+PyYAML==6.0.2
+jsonschema==4.23.0
