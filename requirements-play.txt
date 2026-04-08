@@ -1,0 +1,10 @@
+# Interactive client (Pygame).
+#
+# If pip fails with "fatal error: 'SDL.h' file not found", you are building from source.
+# Fix (pick one):
+#   1) Use Python 3.11 or 3.12 (wheels on PyPI — no compile): pyenv install 3.12 && pyenv local 3.12
+#   2) macOS + Homebrew SDL for source builds:
+#        brew install sdl2 sdl2_image sdl2_mixer sdl2_ttf pkg-config
+#      then: pip install -r requirements-play.txt
+-r requirements.txt
+pygame>=2.5
