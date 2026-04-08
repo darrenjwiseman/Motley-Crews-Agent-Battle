@@ -40,6 +40,14 @@ NUM_PHASES: int = 2
 # Scoring (rules_spec scoring.win_points_threshold)
 DEFAULT_POINTS_TO_WIN: int = 4
 
+# Starting max HP per class_id index (knight, barbarian, white_mage, black_mage, arbalist)
+STARTING_HP_BY_CLASS: tuple[int, ...] = (7, 6, 4, 4, 5)
+
+# Default start rows: A bottom edge, B top edge (diagram p.5); cols 0..4 for five figures
+PLAYER_A_HOME_ROW: int = 7
+PLAYER_B_HOME_ROW: int = 0
+DEFAULT_START_COLS: tuple[int, ...] = (0, 1, 2, 3, 4)
+
 # Black Mage Curse: X is chosen by player; engine validates. Upper bound for mask sizing / agents.
 MAX_CURSE_X: int = 16
 

@@ -1,4 +1,4 @@
-"""Motley Crews environment: observation encoding and turn action types (engine in 4.3)."""
+"""Motley Crews environment: rules engine, observation encoding, and turn actions."""
 
 from motley_crews_env.constants import (
     BOARD_SIZE,
@@ -19,7 +19,15 @@ from motley_crews_env.encoding import (
     structured_observation_to_tensor,
     tensor_shapes,
 )
+from motley_crews_env.engine import (
+    initial_state,
+    legal_actions,
+    scenario_from_placements,
+    step,
+    to_structured_observation,
+)
 from motley_crews_env.serialization import turn_action_from_tuple, turn_action_to_tuple
+from motley_crews_env.state import GameState, IllegalActionError, StepResult
 from motley_crews_env.types import (
     ActionBasicAttack,
     ActionIntent,
@@ -63,4 +71,12 @@ __all__ = [
     "TeamId",
     "TerrainCode",
     "TurnAction",
+    "GameState",
+    "IllegalActionError",
+    "StepResult",
+    "initial_state",
+    "legal_actions",
+    "step",
+    "to_structured_observation",
+    "scenario_from_placements",
 ]
