@@ -129,10 +129,14 @@ class TurnAction:
     Full turn: optional move sub-step and optional action sub-step.
 
     None means pass for that sub-step. Knight Charge is ActionSpecial(CHARGE, ...), not MoveIntent.
+
+    ``resurrect_place`` is set only when ``GameState.pending_resurrect`` requires placing a revived
+    figure in the start zone (move and action must both be None).
     """
 
-    move: Optional[MoveIntent]
-    action: Optional[ActionIntent]
+    move: Optional[MoveIntent] = None
+    action: Optional[ActionIntent] = None
+    resurrect_place: Optional[Coord] = None
 
 
 @dataclass

@@ -21,12 +21,14 @@ from motley_crews_env.constants import (
     MAX_CURSE_X,
     PLAYER_A_HOME_ROW,
     PLAYER_B_HOME_ROW,
+    STAGING_COORD,
     TEAM_PLAYER_A,
     TEAM_PLAYER_B,
     TERRAIN_BLOCKED,
     TERRAIN_OPEN,
 )
 from motley_crews_env.state import (
+    DamageEvent,
     GameState,
     IllegalActionError,
     StepResult,
@@ -242,6 +244,7 @@ def _apply_damage_to_unit(
     base: int,
     *,
     source_class_for_fear: Optional[int],
+    damage_events: Optional[list[DamageEvent]] = None,
 ) -> None:
     u = unit_at(s, target_team, target_slot)
     if u is None:
@@ -250,7 +253,12 @@ def _apply_damage_to_unit(
     if source_class_for_fear is not None and u.class_id == int(ClassId.BARBARIAN):
         if _is_mage_class(source_class_for_fear):
             dmg += 1
+    row, col = u.row, u.col
     u.hp -= dmg
+    if damage_events is not None:
+        damage_events.append(
+            DamageEvent(row=row, col=col, amount=dmg, target_team=target_team, target_slot=target_slot)
+        )
     if u.hp <= 0:
         _kill_unit(s, target_team, target_slot)
 
@@ -270,15 +278,19 @@ def _kill_unit(s: GameState, team: int, slot: int) -> None:
 
 
 def _check_win(s: GameState) -> None:
-    pa = count_living_controlled_by(s, TEAM_PLAYER_A)
-    pb = count_living_controlled_by(s, TEAM_PLAYER_B)
     sa, sb = s.score
     thr = s.points_to_win
     if sa >= thr:
         s.done, s.winner = True, TEAM_PLAYER_A
-    elif sb >= thr:
+        return
+    if sb >= thr:
         s.done, s.winner = True, TEAM_PLAYER_B
-    elif pb == 0:
+        return
+    if s.pending_resurrect is not None:
+        return
+    pa = count_living_controlled_by(s, TEAM_PLAYER_A)
+    pb = count_living_controlled_by(s, TEAM_PLAYER_B)
+    if pb == 0:
         s.done, s.winner = True, TEAM_PLAYER_A
     elif pa == 0:
         s.done, s.winner = True, TEAM_PLAYER_B
@@ -525,7 +537,7 @@ def _legal_specials(s: GameState) -> list[ActionIntent]:
                             )
                 for osl in range(FIGURES_PER_SIDE):
                     du = slot_unit(s, t, osl)
-                    if du is not None and (not du.alive):
+                    if du is not None and (not du.alive) and _has_empty_deploy_cell(s, pl):
                         out.append(
                             ActionSpecial(
                                 actor_slot=sl,
@@ -539,7 +551,9 @@ def _legal_specials(s: GameState) -> list[ActionIntent]:
     return out
 
 
-def _resolve_basic_attack(s: GameState, a: ActionBasicAttack) -> None:
+def _resolve_basic_attack(
+    s: GameState, a: ActionBasicAttack, damage_events: Optional[list[DamageEvent]] = None
+) -> None:
     pl = s.current_player
     u = _actor_unit(s, pl, a.actor_slot)
     if u.containment_ticks > 0:
@@ -562,10 +576,16 @@ def _resolve_basic_attack(s: GameState, a: ActionBasicAttack) -> None:
     elif u.class_id == int(ClassId.ARBALIST):
         if not _arbalist_basic_los(s, u.row, u.col, a.target_square[0], a.target_square[1], 3):
             raise IllegalActionError("los")
-    _apply_damage_to_unit(s, oteam, osl, dmg, source_class_for_fear=u.class_id)
+    _apply_damage_to_unit(s, oteam, osl, dmg, source_class_for_fear=u.class_id, damage_events=damage_events)
 
 
-def _resolve_charge(s: GameState, actor_team: int, slot: int, dest: tuple[int, int]) -> None:
+def _resolve_charge(
+    s: GameState,
+    actor_team: int,
+    slot: int,
+    dest: tuple[int, int],
+    damage_events: Optional[list[DamageEvent]] = None,
+) -> None:
     u = _actor_unit(s, actor_team, slot)
     if u.class_id != int(ClassId.KNIGHT):
         raise IllegalActionError("class")
@@ -587,7 +607,7 @@ def _resolve_charge(s: GameState, actor_team: int, slot: int, dest: tuple[int, i
         tid = s.board[rr, cc]
         if tid >= 0:
             oteam, osl = linear_to_team_slot(tid)
-            _apply_damage_to_unit(s, oteam, osl, 2, source_class_for_fear=None)
+            _apply_damage_to_unit(s, oteam, osl, 2, source_class_for_fear=None, damage_events=damage_events)
     tr, tc = dest
     if _blocks_charge_path(int(s.terrain[tr, tc])) or s.board[tr, tc] >= 0:
         raise IllegalActionError("bad landing")
@@ -596,7 +616,9 @@ def _resolve_charge(s: GameState, actor_team: int, slot: int, dest: tuple[int, i
     s.board[tr, tc] = lin_idx(actor_team, slot)
 
 
-def _resolve_special(s: GameState, sp: ActionSpecial) -> None:
+def _resolve_special(
+    s: GameState, sp: ActionSpecial, damage_events: Optional[list[DamageEvent]] = None
+) -> None:
     pl = s.current_player
     u = _actor_unit(s, pl, sp.actor_slot)
     sid = sp.special_id
@@ -604,7 +626,7 @@ def _resolve_special(s: GameState, sp: ActionSpecial) -> None:
     if sid == SpecialId.CHARGE:
         if sp.target_square is None:
             raise IllegalActionError("charge target")
-        _resolve_charge(s, pl, sp.actor_slot, sp.target_square)
+        _resolve_charge(s, pl, sp.actor_slot, sp.target_square, damage_events=damage_events)
         return
 
     if sid == SpecialId.LONG_EYE:
@@ -642,7 +664,7 @@ def _resolve_special(s: GameState, sp: ActionSpecial) -> None:
         ou = unit_at(s, oteam, osl)
         if ou is None or ou.controller == pl:
             raise IllegalActionError("target")
-        _apply_damage_to_unit(s, oteam, osl, 1, source_class_for_fear=u.class_id)
+        _apply_damage_to_unit(s, oteam, osl, 1, source_class_for_fear=u.class_id, damage_events=damage_events)
         return
 
     if sid == SpecialId.CONVERT:
@@ -729,10 +751,24 @@ def _resolve_special(s: GameState, sp: ActionSpecial) -> None:
         if su is None:
             raise IllegalActionError("self")
         su.hp -= x
+        if damage_events is not None:
+            damage_events.append(
+                DamageEvent(
+                    row=su.row,
+                    col=su.col,
+                    amount=x,
+                    target_team=pl,
+                    target_slot=sp.actor_slot,
+                )
+            )
         tdmg = x + 1
         if ou.class_id == int(ClassId.BARBARIAN) and _is_mage_class(u.class_id):
             tdmg += 1
         ou.hp -= tdmg
+        if damage_events is not None:
+            damage_events.append(
+                DamageEvent(row=ou.row, col=ou.col, amount=tdmg, target_team=oteam, target_slot=osl)
+            )
         if su.hp <= 0:
             _kill_unit(s, pl, sp.actor_slot)
         if ou.hp <= 0:
@@ -770,21 +806,19 @@ def _resolve_special(s: GameState, sp: ActionSpecial) -> None:
         du = slot_unit(s, pl, osl)
         if du is None or du.alive:
             raise IllegalActionError("not dead")
-        _apply_damage_to_unit(s, pl, sp.actor_slot, 1, source_class_for_fear=None)
+        if not _has_empty_deploy_cell(s, pl):
+            raise IllegalActionError("no space")
+        _apply_damage_to_unit(s, pl, sp.actor_slot, 1, source_class_for_fear=None, damage_events=damage_events)
         if unit_at(s, pl, sp.actor_slot) is None:
             return
-        dest = _find_empty_in_start_zone(s, pl)
-        if dest is None:
-            raise IllegalActionError("no space")
-        dr, dc = dest
         rec = du.death_point_recipient
         du.alive = True
         du.hp = 2
         du.controller = pl
-        du.row, du.col = dr, dc
+        du.row, du.col = STAGING_COORD, osl
         du.containment_ticks = 0
         du.death_point_recipient = None
-        s.board[dr, dc] = lin_idx(pl, osl)
+        s.pending_resurrect = (pl, osl)
         if rec is not None:
             sc = list(s.score)
             if sc[rec] > 0:
@@ -793,6 +827,35 @@ def _resolve_special(s: GameState, sp: ActionSpecial) -> None:
         return
 
     raise IllegalActionError("unknown special")
+
+
+def _has_empty_deploy_cell(s: GameState, team: int) -> bool:
+    rows = DEPLOY_ROWS_PLAYER_A if team == TEAM_PLAYER_A else DEPLOY_ROWS_PLAYER_B
+    for r in rows:
+        for c in range(BOARD_SIZE):
+            if s.board[r, c] < 0 and not _blocks_movement(int(s.terrain[r, c])):
+                return True
+    return False
+
+
+def _legal_resurrect_turns(state: GameState) -> list[TurnAction]:
+    out: list[TurnAction] = []
+    pl = state.current_player
+    pr = state.pending_resurrect
+    if pr is None:
+        return []
+    team, _slot = pr
+    if team != pl:
+        return []
+    rows = DEPLOY_ROWS_PLAYER_A if team == TEAM_PLAYER_A else DEPLOY_ROWS_PLAYER_B
+    for r in rows:
+        for c in range(BOARD_SIZE):
+            if state.board[r, c] >= 0:
+                continue
+            if _blocks_movement(int(state.terrain[r, c])):
+                continue
+            out.append(TurnAction(move=None, action=None, resurrect_place=(r, c)))
+    return out
 
 
 def _find_empty_in_start_zone(s: GameState, team: int) -> Optional[tuple[int, int]]:
@@ -912,13 +975,15 @@ def initial_play_state(
     )
 
 
-def _apply_action(s: GameState, act: Optional[ActionIntent]) -> None:
+def _apply_action(
+    s: GameState, act: Optional[ActionIntent], damage_events: Optional[list[DamageEvent]] = None
+) -> None:
     if act is None:
         return
     if isinstance(act, ActionBasicAttack):
-        _resolve_basic_attack(s, act)
+        _resolve_basic_attack(s, act, damage_events)
     else:
-        _resolve_special(s, act)
+        _resolve_special(s, act, damage_events)
 
 
 def _clone_apply_move(state: GameState, move: Optional[MoveIntent]) -> GameState:
@@ -944,6 +1009,8 @@ def legal_actions(state: GameState) -> list[TurnAction]:
         return []
     if state.match_phase != int(MatchPhase.PLAY):
         return []
+    if state.pending_resurrect is not None:
+        return _legal_resurrect_turns(state)
     out: list[TurnAction] = []
     pl = state.current_player
     moves: list[Optional[MoveIntent]] = [None]
@@ -974,7 +1041,7 @@ def legal_actions(state: GameState) -> list[TurnAction]:
             seen.add(key_t)
             try:
                 test = mid.clone()
-                _apply_action(test, ac)
+                _apply_action(test, ac, None)
             except IllegalActionError:
                 continue
             out.append(TurnAction(move=mv, action=ac))
@@ -987,9 +1054,39 @@ def step(state: GameState, turn: TurnAction) -> StepResult:
         raise IllegalActionError("game over")
     if state.match_phase != int(MatchPhase.PLAY):
         raise IllegalActionError("match not in play phase")
+
+    damage_events: list[DamageEvent] = []
+
+    if state.pending_resurrect is not None:
+        s = state.clone()
+        if turn.move is not None or turn.action is not None:
+            raise IllegalActionError("placement only")
+        if turn.resurrect_place is None:
+            raise IllegalActionError("placement")
+        legal_pl = _legal_resurrect_turns(s)
+        if turn not in legal_pl:
+            raise IllegalActionError("illegal place")
+        pl = s.current_player
+        team, slot = s.pending_resurrect
+        if team != pl:
+            raise IllegalActionError("pending")
+        dr, dc = turn.resurrect_place
+        u = slot_unit(s, team, slot)
+        if u is None or not u.alive or u.row >= 0:
+            raise IllegalActionError("bad unit")
+        u.row, u.col = dr, dc
+        s.board[dr, dc] = lin_idx(team, slot)
+        s.pending_resurrect = None
+        _check_win(s)
+        if not s.done:
+            _advance_turn(s)
+        return StepResult(state=s, done=s.done, winner=s.winner, damage_events=tuple(damage_events))
+
     s = state.clone()
     pl = s.current_player
     try:
+        if turn.resurrect_place is not None:
+            raise IllegalActionError("resurrect_place")
         if turn.move is not None:
             u = unit_at(s, pl, turn.move.actor_slot)
             if u is None or u.controller != pl:
@@ -1000,13 +1097,13 @@ def step(state: GameState, turn: TurnAction) -> StepResult:
             if dest not in _legal_destinations_for_unit(s, pl, turn.move.actor_slot):
                 raise IllegalActionError("dest")
             _apply_move_only(s, pl, turn.move.actor_slot, dest)
-        _apply_action(s, turn.action)
+        _apply_action(s, turn.action, damage_events)
     except IllegalActionError:
         raise
     _check_win(s)
-    if not s.done:
+    if not s.done and s.pending_resurrect is None:
         _advance_turn(s)
-    return StepResult(state=s, done=s.done, winner=s.winner)
+    return StepResult(state=s, done=s.done, winner=s.winner, damage_events=tuple(damage_events))
 
 
 def to_structured_observation(state: GameState) -> StructuredObservation:

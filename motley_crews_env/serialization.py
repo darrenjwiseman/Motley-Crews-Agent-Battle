@@ -60,13 +60,30 @@ def turn_action_to_tuple(action: TurnAction) -> tuple[Any, ...]:
             an,
         )
 
+    if action.resurrect_place is not None:
+        rr, rc = action.resurrect_place
+        return (move_part, action_part, ("rp", rr, rc))
     return (move_part, action_part)
 
 
+_TAG_RP = "rp"
+
+
 def turn_action_from_tuple(data: tuple[Any, ...]) -> TurnAction:
-    if len(data) != 2:
-        raise ValueError("Expected (move_part, action_part)")
-    move_part, action_part = data
+    if len(data) == 2:
+        move_part, action_part = data
+        resurrect_place = None
+    elif len(data) == 3:
+        move_part, action_part, rp_part = data
+        if (
+            not isinstance(rp_part, tuple)
+            or len(rp_part) != 3
+            or rp_part[0] != _TAG_RP
+        ):
+            raise ValueError(f"Invalid resurrect_part: {rp_part!r}")
+        resurrect_place = (int(rp_part[1]), int(rp_part[2]))
+    else:
+        raise ValueError("Expected (move_part, action_part) or with resurrect tuple")
 
     move: Optional[MoveIntent] = None
     if move_part is not None:
@@ -103,4 +120,4 @@ def turn_action_from_tuple(data: tuple[Any, ...]) -> TurnAction:
         else:
             raise ValueError(f"Unknown action tag {tag!r}")
 
-    return TurnAction(move=move, action=action)
+    return TurnAction(move=move, action=action, resurrect_place=resurrect_place)

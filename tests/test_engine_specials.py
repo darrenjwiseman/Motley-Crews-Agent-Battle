@@ -6,7 +6,7 @@ import numpy as np
 
 from motley_crews_env.constants import TERRAIN_OPEN
 from motley_crews_env.engine import legal_actions, scenario_from_placements, step
-from motley_crews_env.state import unit_at
+from motley_crews_env.state import slot_unit, unit_at
 from motley_crews_env.types import ActionSpecial, ClassId, SpecialId, TeamId, TurnAction
 
 
@@ -185,6 +185,16 @@ def test_animate_dead_revives_and_score_refund() -> None:
         ),
     )
     s2 = step(s, ta).state
-    assert unit_at(s2, 0, 0) is not None
-    assert unit_at(s2, 0, 0).hp == 2
+    assert s2.pending_resurrect == (0, 0)
+    k2 = slot_unit(s2, 0, 0)
+    assert k2 is not None and k2.alive and k2.row < 0
+    assert k2.hp == 2
     assert s2.score[1] == 0  # refunded B's point
+
+    place = TurnAction(move=None, action=None, resurrect_place=(6, 0))
+    s3 = step(s2, place).state
+    assert s3.pending_resurrect is None
+    u = unit_at(s3, 0, 0)
+    assert u is not None
+    assert u.row == 6 and u.col == 0
+    assert u.hp == 2

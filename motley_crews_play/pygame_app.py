@@ -59,7 +59,12 @@ from motley_crews_env.state import (
     slot_unit,
     unit_at,
 )
-from motley_crews_play.formatting import format_play_log_line, format_turn_action, player_label
+from motley_crews_play.formatting import (
+    format_play_log_line,
+    format_step_outcome,
+    format_turn_action,
+    player_label,
+)
 from motley_crews_play.policies import ScriptedHeuristicPolicy
 
 
@@ -552,11 +557,11 @@ class MotleyCrewsUI:
         self.play_log: list[str] = []
         self.log_scroll: int = 0
         self._log_max_lines = 400
+        # (row, col, total_damage, remaining_ms) for floating hit numbers
+        self._damage_fx: list[tuple[int, int, int, float]] = []
+        self._menu_hover_key: Optional[str] = None
+        self.btn_return_menu: pygame.Rect = pygame.Rect(0, 0, 1, 1)
         self._recompute_layout()
-
-        # menu buttons: (rect, mode or "start" or view toggle)
-        self._layout_menu_buttons()
-        self._layout_setup_buttons()
 
     def _recompute_layout(self) -> None:
         w, h = self.win_w, self.win_h
@@ -572,13 +577,18 @@ class MotleyCrewsUI:
         scale = self.cell_top / float(CELL_TOP)
         self.tw_iso = max(36, int(TW_ISO * scale))
         self.th_iso = max(20, int(TH_ISO * scale))
-        self.iso_ox = 120
+        # Center isometric grid in the board panel
+        iso_approx_w = (BOARD_SIZE - 1) * (self.tw_iso // 2) + self.tw_iso
+        self.iso_ox = max(24, (self.sidebar_x - iso_approx_w) // 2)
         self.iso_oy_play = ISO_OY_SETUP + (self.board_oy_play - BOARD_OY_SETUP)
         self._token_r_top = max(12, int(18 * scale))
         self._token_r_iso = max(10, int(14 * scale))
         self.btn_pass_turn = pygame.Rect(self.sidebar_x + 8, TOP_MARGIN + 2, 150, 26)
         self.btn_pass_action_after_move = pygame.Rect(self.sidebar_x + 8, TOP_MARGIN + 30, 190, 26)
         self.log_scroll = min(self.log_scroll, self._max_log_scroll())
+        self.btn_return_menu = pygame.Rect(w // 2 - 120, int(h * 0.70), 240, 48)
+        self._layout_menu_buttons()
+        self._layout_setup_buttons()
 
     def _board_origin_top(self, *, play: bool = False) -> tuple[int, int]:
         if not play:
@@ -601,17 +611,24 @@ class MotleyCrewsUI:
         return cx, cy
 
     def _layout_menu_buttons(self) -> None:
-        self.btn_cpu_cpu = pygame.Rect(80, 140, 280, 40)
-        self.btn_h_a = pygame.Rect(80, 190, 280, 40)
-        self.btn_h_b = pygame.Rect(80, 240, 280, 40)
-        self.btn_h_h = pygame.Rect(80, 290, 280, 40)
-        self.btn_view = pygame.Rect(80, 360, 280, 36)
-        self.btn_start = pygame.Rect(80, 430, 200, 44)
+        w, h = self.win_w, self.win_h
+        left = max(48, int(w * 0.05))
+        bw = min(420, int(w * 0.42))
+        gap = max(36, int(h * 0.048))
+        y0 = int(h * 0.14)
+        self.btn_cpu_cpu = pygame.Rect(left, y0, bw, 40)
+        self.btn_h_a = pygame.Rect(left, y0 + gap, bw, 40)
+        self.btn_h_b = pygame.Rect(left, y0 + gap * 2, bw, 40)
+        self.btn_h_h = pygame.Rect(left, y0 + gap * 3, bw, 40)
+        self.btn_view = pygame.Rect(left, y0 + gap * 4 + 24, bw, 36)
+        self.btn_start = pygame.Rect(left, y0 + gap * 5 + 40, min(220, bw), 44)
 
     def _layout_setup_buttons(self) -> None:
-        self.btn_flip_coin = pygame.Rect(380, 320, 280, 48)
-        self.btn_setup_first = pygame.Rect(220, 380, 300, 44)
-        self.btn_setup_second = pygame.Rect(540, 380, 300, 44)
+        w, h = self.win_w, self.win_h
+        cx = w // 2
+        self.btn_flip_coin = pygame.Rect(cx - 140, int(h * 0.36), 280, 48)
+        self.btn_setup_first = pygame.Rect(cx - 300, int(h * 0.44), 280, 44)
+        self.btn_setup_second = pygame.Rect(cx + 20, int(h * 0.44), 280, 44)
 
     def reset_match(self) -> None:
         self.rng_cpu = random.Random(self.seed)
@@ -635,6 +652,7 @@ class MotleyCrewsUI:
         self.cpu_timer = 0
         self.play_log = []
         self.log_scroll = 0
+        self._damage_fx = []
 
     def _refresh_legal(self) -> None:
         if self.game_state is None or self.game_state.done:
@@ -664,10 +682,21 @@ class MotleyCrewsUI:
             return
         actor = self.game_state.current_player
         line = format_play_log_line(actor, ta)
+        sr = step(self.game_state, ta)
+        outcome = format_step_outcome(sr)
+        if outcome:
+            line = line + outcome
         self.play_log.append(line)
         if len(self.play_log) > self._log_max_lines:
             self.play_log = self.play_log[-self._log_max_lines :]
-        self.game_state = step(self.game_state, ta).state
+        self.game_state = sr.state
+        # Aggregate damage markers per cell for this step
+        by_cell: dict[tuple[int, int], int] = {}
+        for ev in sr.damage_events:
+            k = (ev.row, ev.col)
+            by_cell[k] = by_cell.get(k, 0) + ev.amount
+        for (r, c), amt in by_cell.items():
+            self._damage_fx.append((r, c, amt, 1000.0))
         self.cpu_timer = 0
         self._after_step()
 
@@ -697,6 +726,13 @@ class MotleyCrewsUI:
             or not self.legal_list
         ):
             return empty, HL_MOVE
+        gs = self.game_state
+        if gs.pending_resurrect is not None:
+            cells: set[tuple[int, int]] = set()
+            for ta in self.legal_list:
+                if ta.resurrect_place is not None:
+                    cells.add(ta.resurrect_place)
+            return cells, (255, 220, 80, 88)
         slot = self._play_slot
         if self._play_ui_mode == "action_after_move" and self.game_state is not None:
             if self._pending_move is not None:
@@ -1004,6 +1040,15 @@ class MotleyCrewsUI:
         legal = self.legal_list
         if not gs or not legal or not self._is_human_turn():
             return False
+        if gs.pending_resurrect is not None:
+            cell = self._screen_to_cell((mx, my))
+            if cell is None:
+                return False
+            ta = TurnAction(move=None, action=None, resurrect_place=cell)
+            if ta in legal:
+                self._commit_turn(ta)
+                return True
+            return False
         cell = self._screen_to_cell((mx, my))
         if cell is None:
             return False
@@ -1147,6 +1192,17 @@ class MotleyCrewsUI:
             return pygame.Rect(x, 48, 44, 44)
         return pygame.Rect(x, 548, 44, 44)
 
+    def _staging_slot_rect_play(self, team: int, slot: int) -> pygame.Rect:
+        ox = self.board_ox
+        gap = self.cell_top
+        w = max(36, int(self.cell_top * 0.78))
+        x = ox + slot * gap + (gap - w) // 2
+        if team == TEAM_PLAYER_B:
+            y = self.board_oy_play - w - 10
+        else:
+            y = self.board_oy_play + self.board_grid_px + 10
+        return pygame.Rect(x, y, w, w)
+
     def _try_setup_placement(self, team: int, slot: int, dest: tuple[int, int]) -> None:
         assert self.game_state is not None
         placement = SetupPlacement(actor_slot=slot, destination=dest)
@@ -1183,6 +1239,7 @@ class MotleyCrewsUI:
             return
         if self.game_state.done:
             self.phase = "over"
+            self.legal_list = []
         else:
             self._refresh_legal()
 
@@ -1240,6 +1297,14 @@ class MotleyCrewsUI:
                                 ),
                             )
 
+            if self._damage_fx:
+                new_fx: list[tuple[int, int, int, float]] = []
+                for r, c, amt, rem in self._damage_fx:
+                    rem -= dt
+                    if rem > 0:
+                        new_fx.append((r, c, amt, rem))
+                self._damage_fx = new_fx
+
             if self.phase == "setup_place" and self.game_state and self.game_state.match_phase == int(
                 MatchPhase.SETUP
             ):
@@ -1264,6 +1329,8 @@ class MotleyCrewsUI:
         if key == pygame.K_ESCAPE:
             if self.phase == "menu":
                 pass
+            elif self.phase == "over":
+                self.phase = "menu"
             elif self.phase == "play" and self._play_ui_mode != "idle":
                 self._reset_play_interaction()
             else:
@@ -1343,7 +1410,8 @@ class MotleyCrewsUI:
             return
 
         if self.phase == "over":
-            self.phase = "menu"
+            if button == 1 and self.btn_return_menu.collidepoint(mx, my):
+                self.phase = "menu"
             return
 
         if self.phase == "play" and self.game_state and self._is_human_turn() and button == 1:
@@ -1394,6 +1462,20 @@ class MotleyCrewsUI:
             return
 
     def _on_mouse_motion(self, pos: tuple[int, int]) -> None:
+        mx, my = pos
+        if self.phase == "menu":
+            self._menu_hover_key = None
+            for key, rect in (
+                ("cpu", self.btn_cpu_cpu),
+                ("ha", self.btn_h_a),
+                ("hb", self.btn_h_b),
+                ("hh", self.btn_h_h),
+                ("view", self.btn_view),
+                ("start", self.btn_start),
+            ):
+                if rect.collidepoint(mx, my):
+                    self._menu_hover_key = key
+                    break
         if self._drag is not None:
             self._drag_pos = pos
         elif self.phase == "play" and self._play_move_drag_slot is not None:
@@ -1563,32 +1645,49 @@ class MotleyCrewsUI:
             self._draw_setup_place()
         elif self.phase == "play":
             self._draw_play()
-        else:
-            self._draw_game_over()
+        elif self.phase == "over":
+            self._draw_play()
+            self._draw_game_over_modal()
 
     def _draw_menu(self) -> None:
+        w, h = self.win_w, self.win_h
+        tx = max(48, int(w * 0.05))
+        ty = int(h * 0.07)
         t = self.font.render("Motley Crews", True, (240, 240, 245))
-        self.screen.blit(t, (80, 60))
-        labels = [
-            (self.btn_cpu_cpu, "CPU vs CPU"),
-            (self.btn_h_a, "1P vs CPU (you: Player A)"),
-            (self.btn_h_b, "1P vs CPU (you: Player B)"),
-            (self.btn_h_h, "1P vs 2P (hotseat)"),
+        self.screen.blit(t, (tx, ty))
+        menu_rows = [
+            ("cpu", self.btn_cpu_cpu, "CPU vs CPU"),
+            ("ha", self.btn_h_a, "1P vs CPU (you: Player A)"),
+            ("hb", self.btn_h_b, "1P vs CPU (you: Player B)"),
+            ("hh", self.btn_h_h, "1P vs 2P (hotseat)"),
         ]
-        for rect, text in labels:
-            pygame.draw.rect(self.screen, (70, 74, 88), rect, border_radius=6)
+        for key, rect, text in menu_rows:
+            hover = self._menu_hover_key == key
+            bg = (95, 100, 130) if hover else (70, 74, 88)
+            pygame.draw.rect(self.screen, bg, rect, border_radius=6)
+            if hover:
+                pygame.draw.rect(self.screen, (160, 185, 240), rect, 2, border_radius=6)
             self.screen.blit(self.font.render(text, True, (230, 230, 235)), (rect.x + 12, rect.y + 10))
         vm = "Isometric" if self.view_mode == ViewMode.ISOMETRIC else "Top-down"
-        pygame.draw.rect(self.screen, (86, 90, 108), self.btn_view, border_radius=6)
+        vkey = "view"
+        vhover = self._menu_hover_key == vkey
+        vbg = (105, 110, 135) if vhover else (86, 90, 108)
+        pygame.draw.rect(self.screen, vbg, self.btn_view, border_radius=6)
+        if vhover:
+            pygame.draw.rect(self.screen, (160, 185, 240), self.btn_view, 2, border_radius=6)
         self.screen.blit(self.font.render(f"Board view: {vm} (toggle)", True, (220, 220, 230)), (self.btn_view.x + 12, self.btn_view.y + 8))
-        pygame.draw.rect(self.screen, (110, 130, 180), self.btn_start, border_radius=6)
+        shover = self._menu_hover_key == "start"
+        sbg = (130, 150, 210) if shover else (110, 130, 180)
+        pygame.draw.rect(self.screen, sbg, self.btn_start, border_radius=6)
+        if shover:
+            pygame.draw.rect(self.screen, (200, 215, 255), self.btn_start, 2, border_radius=6)
         self.screen.blit(self.font.render("Start", True, (255, 255, 255)), (self.btn_start.x + 72, self.btn_start.y + 12))
         hint = self.font_small.render(
             "Human modes: coin toss → setup choice → drag crew onto zones. In-game: V toggles view. Esc = menu.",
             True,
             (160, 165, 180),
         )
-        self.screen.blit(hint, (80, 500))
+        self.screen.blit(hint, (tx, int(h * 0.88)))
 
     def _draw_setup_coin(self) -> None:
         self.screen.blit(self.font.render("Coin toss", True, (240, 240, 245)), (80, 60))
@@ -1720,17 +1819,39 @@ class MotleyCrewsUI:
             hud += "  [CPU placing…]"
         self.screen.blit(self.font.render(hud, True, (220, 220, 230)), (32, 600))
 
-    def _draw_game_over(self) -> None:
+    def _draw_game_over_modal(self) -> None:
         assert self.game_state is not None
         s = self.game_state
         w = s.winner
         msg = f"Winner: {player_label(w)}" if w is not None else "Draw"
         overlay = pygame.Surface((self.win_w, self.win_h), pygame.SRCALPHA)
-        overlay.fill((0, 0, 0, 170))
+        overlay.fill((0, 0, 0, 125))
         self.screen.blit(overlay, (0, 0))
-        self.screen.blit(self.font.render(msg, True, (255, 255, 255)), (400, 300))
-        self.screen.blit(self.font.render(f"Scores: {s.score[0]} — {s.score[1]}", True, (220, 220, 230)), (380, 340))
-        self.screen.blit(self.font_small.render("Click anywhere for menu", True, (180, 185, 200)), (400, 400))
+        cx = self.win_w // 2
+        cy = int(self.win_h * 0.36)
+        tw = self.font.size(msg)[0]
+        self.screen.blit(self.font.render(msg, True, (255, 255, 255)), (cx - tw // 2, cy))
+        score_t = f"Scores: {s.score[0]} — {s.score[1]}"
+        sw = self.font.size(score_t)[0]
+        self.screen.blit(self.font.render(score_t, True, (220, 220, 230)), (cx - sw // 2, cy + 42))
+        pygame.draw.rect(self.screen, (90, 130, 200), self.btn_return_menu, border_radius=8)
+        self.screen.blit(
+            self.font.render("Return to menu", True, (255, 255, 255)),
+            (self.btn_return_menu.x + 42, self.btn_return_menu.y + 12),
+        )
+
+    def _draw_damage_fx(self) -> None:
+        for r, c, amt, rem in self._damage_fx:
+            alpha = min(255, int(255 * (rem / 1000.0)))
+            col = (255, min(255, 70 + (255 - alpha) // 4), 60)
+            if self.view_mode == ViewMode.TOP_DOWN:
+                cx, cy = self._cell_center_top(r, c, play=True)
+            else:
+                cx, cy = self._cell_center_iso(r, c, play=True)
+                cy -= 4
+            txt = self.font.render(f"−{amt}", True, col)
+            txt.set_alpha(alpha)
+            self.screen.blit(txt, (cx - txt.get_width() // 2, cy - 26))
 
     def _draw_play(self) -> None:
         assert self.game_state is not None
@@ -1742,6 +1863,28 @@ class MotleyCrewsUI:
             self._draw_board_top(obs, highlight_cells=hl_cells, hl_rgba=hl_rgba)
         else:
             self._draw_board_iso(obs, highlight_cells=hl_cells, hl_rgba=hl_rgba)
+
+        self._draw_damage_fx()
+
+        if gs.pending_resurrect is not None:
+            team, slot = gs.pending_resurrect
+            u = slot_unit(gs, team, slot)
+            if u is not None and u.alive and u.row < 0:
+                rect = self._staging_slot_rect_play(team, slot)
+                cx, cy = rect.centerx, rect.centery
+                self._blit_token_top(
+                    cx,
+                    cy,
+                    u.class_id,
+                    team,
+                    radius=max(12, self._token_r_top - 2),
+                    view=ViewMode.TOP_DOWN,
+                )
+                hy = self.board_oy_play - 26 if team == TEAM_PLAYER_B else self.board_oy_play + self.board_grid_px + 4
+                self.screen.blit(
+                    self.font_small.render("Revived — place in a highlighted square in your start zone", True, (255, 215, 130)),
+                    (self.board_ox, hy),
+                )
 
         if self._is_human_turn() and self._play_slot is not None:
             u = unit_at(gs, gs.current_player, self._play_slot)
@@ -1790,11 +1933,12 @@ class MotleyCrewsUI:
 
         self._draw_play_log()
 
-        play_hint = (
-            "Move set — teal = who may act. Pass or Esc cancels."
-            if self._pending_move is not None
-            else "Click piece → Move / Attack / Special. After move, pick who acts. Esc = cancel."
-        )
+        if gs.pending_resurrect is not None and self._is_human_turn():
+            play_hint = "Click a highlighted square in your start zone to place the revived figure."
+        elif self._pending_move is not None:
+            play_hint = "Move set — teal = who may act. Pass or Esc cancels."
+        else:
+            play_hint = "Click piece → Move / Attack / Special. After move, pick who acts. Esc = cancel."
         self.screen.blit(self.font_small.render(play_hint, True, (130, 135, 155)), (BOARD_OX, TOP_MARGIN + 22))
 
         if self._is_human_turn() and _pass_turn_in_legal(self.legal_list):

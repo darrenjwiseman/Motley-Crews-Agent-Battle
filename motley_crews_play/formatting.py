@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from motley_crews_env.constants import CLASS_IDS, SPECIAL_IDS, TEAM_PLAYER_A
+from motley_crews_env.state import StepResult, slot_unit
 from motley_crews_env.types import ActionBasicAttack, ActionSpecial, TurnAction
 
 
@@ -14,8 +15,23 @@ def format_play_log_line(player: int, a: TurnAction) -> str:
     return f"{player_label(player)}: {format_turn_action(a)}"
 
 
+def format_step_outcome(sr: StepResult) -> str:
+    """Summarize damage from ``sr.damage_events`` after ``step`` (post-state)."""
+    if not sr.damage_events:
+        return ""
+    parts: list[str] = []
+    for ev in sr.damage_events:
+        u = slot_unit(sr.state, ev.target_team, ev.target_slot)
+        label = CLASS_IDS[u.class_id][:3] if u is not None else "?"
+        parts.append(f"{label} −{ev.amount} ({player_label(ev.target_team)}) @ ({ev.row},{ev.col})")
+    return " → " + "; ".join(parts)
+
+
 def format_turn_action(a: TurnAction) -> str:
     parts: list[str] = []
+    if a.resurrect_place is not None:
+        rr, rc = a.resurrect_place
+        return f"place resurrect: ({rr},{rc})"
     if a.move is None:
         parts.append("move: —")
     else:

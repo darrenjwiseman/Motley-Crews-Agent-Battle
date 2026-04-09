@@ -9,7 +9,7 @@ Class order per slot i matches ``constants.CLASS_IDS[i]``.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Tuple
 
 import numpy as np
 from numpy.typing import NDArray
@@ -75,6 +75,9 @@ class GameState:
     setup_current_player: int = TEAM_PLAYER_A
     first_player: int = TEAM_PLAYER_A
     coin_flip_winner: Optional[int] = None
+    # (team, slot) — revived unit must be placed in deploy rows before the turn advances
+    pending_resurrect: Optional[Tuple[int, int]] = None
+
     def clone(self) -> GameState:
         u = [None if x is None else _copy_unit(x) for x in self.units]
         return GameState(
@@ -92,6 +95,7 @@ class GameState:
             setup_current_player=self.setup_current_player,
             first_player=self.first_player,
             coin_flip_winner=self.coin_flip_winner,
+            pending_resurrect=self.pending_resurrect,
         )
 
 
@@ -229,8 +233,20 @@ def allows_diagonal_basic(class_id: int) -> bool:
     return class_id == int(ClassId.ARBALIST)
 
 
+@dataclass(frozen=True, slots=True)
+class DamageEvent:
+    """One damage application at a board cell (for UI / logging)."""
+
+    row: int
+    col: int
+    amount: int
+    target_team: int
+    target_slot: int
+
+
 @dataclass
 class StepResult:
     state: GameState
     done: bool
     winner: Optional[int] = None
+    damage_events: Tuple[DamageEvent, ...] = ()

@@ -108,6 +108,11 @@ def test_turn_action_round_trip_animate_dead_no_square() -> None:
     assert turn_action_from_tuple(turn_action_to_tuple(ta)) == ta
 
 
+def test_turn_action_round_trip_resurrect_place() -> None:
+    ta = TurnAction(move=None, action=None, resurrect_place=(6, 0))
+    assert turn_action_from_tuple(turn_action_to_tuple(ta)) == ta
+
+
 def test_turn_action_invalid_tuple_raises() -> None:
     with pytest.raises(ValueError):
         turn_action_from_tuple((None, None, None))
