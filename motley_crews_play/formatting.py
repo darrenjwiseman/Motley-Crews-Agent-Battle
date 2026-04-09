@@ -2,8 +2,16 @@
 
 from __future__ import annotations
 
-from motley_crews_env.constants import CLASS_IDS, SPECIAL_IDS
+from motley_crews_env.constants import CLASS_IDS, SPECIAL_IDS, TEAM_PLAYER_A
 from motley_crews_env.types import ActionBasicAttack, ActionSpecial, TurnAction
+
+
+def player_label(team: int) -> str:
+    return "Player A" if team == TEAM_PLAYER_A else "Player B"
+
+
+def format_play_log_line(player: int, a: TurnAction) -> str:
+    return f"{player_label(player)}: {format_turn_action(a)}"
 
 
 def format_turn_action(a: TurnAction) -> str:

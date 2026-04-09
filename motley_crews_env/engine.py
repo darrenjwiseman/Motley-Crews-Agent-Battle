@@ -676,7 +676,12 @@ def _resolve_special(s: GameState, sp: ActionSpecial) -> None:
             raise IllegalActionError("empty")
         oteam, osl = linear_to_team_slot(tid)
         ou = unit_at(s, oteam, osl)
-        if ou is None or ou.controller != pl or (oteam == pl and osl == sp.actor_slot):
+        if ou is None or ou.controller != pl:
+            raise IllegalActionError("heal target")
+        # Exclude only self (same unit as the white mage), using identity — not
+        # (oteam, osl) vs (pl, actor_slot), which mis-fires when roster indexing
+        # does not match current_player slot conventions.
+        if ou is u:
             raise IllegalActionError("heal target")
         ou.hp = min(ou.max_hp, ou.hp + 3)
         return

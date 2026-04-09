@@ -50,8 +50,16 @@ from motley_crews_env.types import (
     SpecialId,
     TurnAction,
 )
-from motley_crews_env.state import GameState, slot_unit, unit_at
-from motley_crews_play.formatting import format_turn_action
+from motley_crews_env.state import (
+    GameState,
+    UnitState,
+    class_basic_damage,
+    class_move_value,
+    class_reach_basic,
+    slot_unit,
+    unit_at,
+)
+from motley_crews_play.formatting import format_play_log_line, format_turn_action, player_label
 from motley_crews_play.policies import ScriptedHeuristicPolicy
 
 
@@ -67,33 +75,120 @@ class PlayMode(IntEnum):
     HUMAN_HUMAN = 3
 
 
-# --- projection -----------------------------------------------------------------
+# --- projection & layout --------------------------------------------------------
 
+WINDOW_W = 1200
+WINDOW_H = 860
+BOARD_OX = 32
 CELL_TOP = 56
+TOP_MARGIN = 8
+PLAY_HUD_H = 26
+PANEL_B_H = 96
+PANEL_A_H = 96
+# Setup / menu: original board vertical position (unchanged for setup screens)
+BOARD_OY_SETUP = 96
+# Play: flanking roster bands + compact HUD above board
+BOARD_OY_PLAY = TOP_MARGIN + PLAY_HUD_H + PANEL_B_H
+BOARD_GRID_PX = BOARD_SIZE * CELL_TOP
 TW_ISO = 52
 TH_ISO = 28
+ISO_OX = 120
+ISO_OY_SETUP = 200
+ISO_OY_PLAY = ISO_OY_SETUP + (BOARD_OY_PLAY - BOARD_OY_SETUP)
+
+LOG_TOP = 62
+LOG_LINE_H = 18
+
+# Per-class combat stats and special names (roster display)
+CLASS_SPECIALS_DISPLAY: tuple[str, ...] = (
+    "Charge",
+    "—",
+    "Conjure containment, Convert, Heal",
+    "Curse, Magic bomb, Animate dead",
+    "Long eye",
+)
 
 
-def board_origin_top() -> tuple[int, int]:
-    return 32, 96
+def _wrap_text_to_width(font: pygame.font.Font, text: str, max_width: int) -> list[str]:
+    if not text.strip():
+        return [""]
+    words = text.split()
+    lines: list[str] = []
+    cur: list[str] = []
+    for w in words:
+        trial = " ".join(cur + [w]) if cur else w
+        if font.size(trial)[0] <= max_width:
+            cur.append(w)
+        else:
+            if cur:
+                lines.append(" ".join(cur))
+            cur = [w]
+    if cur:
+        lines.append(" ".join(cur))
+    return lines if lines else [""]
 
 
-def board_origin_iso() -> tuple[int, int]:
-    return 120, 200
+def board_origin_top(*, play: bool = False) -> tuple[int, int]:
+    return BOARD_OX, BOARD_OY_PLAY if play else BOARD_OY_SETUP
 
 
-def cell_center_top(row: int, col: int) -> tuple[int, int]:
-    ox, oy = board_origin_top()
+def board_origin_iso(*, play: bool = False) -> tuple[int, int]:
+    return ISO_OX, ISO_OY_PLAY if play else ISO_OY_SETUP
+
+
+def cell_center_top(row: int, col: int, *, play: bool = False) -> tuple[int, int]:
+    ox, oy = board_origin_top(play=play)
     cx = ox + col * CELL_TOP + CELL_TOP // 2
     cy = oy + row * CELL_TOP + CELL_TOP // 2
     return cx, cy
 
 
-def cell_center_iso(row: int, col: int) -> tuple[int, int]:
-    ox, oy = board_origin_iso()
+def cell_center_iso(row: int, col: int, *, play: bool = False) -> tuple[int, int]:
+    ox, oy = board_origin_iso(play=play)
     cx = ox + (col - row) * (TW_ISO // 2)
     cy = oy + (col + row) * (TH_ISO // 2)
     return cx, cy
+
+
+def _checkerboard_tint(
+    base: tuple[int, int, int], r: int, c: int, terrain_kind: int
+) -> tuple[int, int, int]:
+    if terrain_kind != TERRAIN_OPEN:
+        return base
+    delta = 12 if (r + c) % 2 == 1 else -12
+    return (
+        max(0, min(255, base[0] + delta)),
+        max(0, min(255, base[1] + delta)),
+        max(0, min(255, base[2] + delta)),
+    )
+
+
+def _draw_team_marker(
+    screen: pygame.Surface,
+    cx: int,
+    cy_token: int,
+    team: int,
+    *,
+    view: ViewMode,
+    radius: int,
+) -> None:
+    """Player A (south): ▲ above token; Player B (north): ▼ below."""
+    if team == TEAM_PLAYER_A:
+        col = (130, 170, 255)
+        if view == ViewMode.TOP_DOWN:
+            tip_y = cy_token - radius - 2
+            pygame.draw.polygon(screen, col, [(cx, tip_y), (cx - 6, tip_y + 8), (cx + 6, tip_y + 8)])
+        else:
+            tip_y = cy_token - radius - 2
+            pygame.draw.polygon(screen, col, [(cx, tip_y), (cx - 5, tip_y + 7), (cx + 5, tip_y + 7)])
+    else:
+        col = (255, 170, 130)
+        if view == ViewMode.TOP_DOWN:
+            tip_y = cy_token + radius + 2
+            pygame.draw.polygon(screen, col, [(cx, tip_y), (cx - 6, tip_y - 8), (cx + 6, tip_y - 8)])
+        else:
+            tip_y = cy_token + radius + 2
+            pygame.draw.polygon(screen, col, [(cx, tip_y), (cx - 5, tip_y - 7), (cx + 5, tip_y - 7)])
 
 
 # --- palette --------------------------------------------------------------------
@@ -410,7 +505,9 @@ def _animate_dead_slots_for_slot_candidates(
 class MotleyCrewsUI:
     def __init__(self, seed: int = 0) -> None:
         pygame.init()
-        self.screen = pygame.display.set_mode((1040, 720))
+        self.win_w = WINDOW_W
+        self.win_h = WINDOW_H
+        self.screen = pygame.display.set_mode((self.win_w, self.win_h), pygame.RESIZABLE)
         pygame.display.set_caption("Motley Crews")
         self.clock = pygame.time.Clock()
         self.font = pygame.font.SysFont("Menlo", 18) if sys.platform == "darwin" else pygame.font.SysFont("Consolas", 18)
@@ -452,12 +549,56 @@ class MotleyCrewsUI:
         self._play_show_fallback_list: bool = False
         self._pending_move: Optional[MoveIntent] = None
         self._turn_candidates: list[TurnAction] = []
-        self.btn_pass_turn = pygame.Rect(708, 26, 150, 26)
-        self.btn_pass_action_after_move = pygame.Rect(708, 58, 190, 26)
+        self.play_log: list[str] = []
+        self.log_scroll: int = 0
+        self._log_max_lines = 400
+        self._recompute_layout()
 
         # menu buttons: (rect, mode or "start" or view toggle)
         self._layout_menu_buttons()
         self._layout_setup_buttons()
+
+    def _recompute_layout(self) -> None:
+        w, h = self.win_w, self.win_h
+        self.sidebar_x = max(520, int(w * 0.56))
+        self.sidebar_w = w - self.sidebar_x
+        self.board_ox = 12
+        avail = self.sidebar_x - self.board_ox - 8
+        self.cell_top = max(40, min(CELL_TOP, avail // BOARD_SIZE))
+        self.board_grid_px = self.cell_top * BOARD_SIZE
+        self.board_oy_play = TOP_MARGIN + PLAY_HUD_H + PANEL_B_H
+        self.log_bottom = h - 12
+        self.legal_list_top = min(int(h * 0.48), max(120, h - 280))
+        scale = self.cell_top / float(CELL_TOP)
+        self.tw_iso = max(36, int(TW_ISO * scale))
+        self.th_iso = max(20, int(TH_ISO * scale))
+        self.iso_ox = 120
+        self.iso_oy_play = ISO_OY_SETUP + (self.board_oy_play - BOARD_OY_SETUP)
+        self._token_r_top = max(12, int(18 * scale))
+        self._token_r_iso = max(10, int(14 * scale))
+        self.btn_pass_turn = pygame.Rect(self.sidebar_x + 8, TOP_MARGIN + 2, 150, 26)
+        self.btn_pass_action_after_move = pygame.Rect(self.sidebar_x + 8, TOP_MARGIN + 30, 190, 26)
+        self.log_scroll = min(self.log_scroll, self._max_log_scroll())
+
+    def _board_origin_top(self, *, play: bool = False) -> tuple[int, int]:
+        if not play:
+            return BOARD_OX, BOARD_OY_SETUP
+        return self.board_ox, self.board_oy_play
+
+    def _cell_center_top(self, row: int, col: int, *, play: bool = False) -> tuple[int, int]:
+        ox, oy = self._board_origin_top(play=play)
+        ct = self.cell_top if play else CELL_TOP
+        cx = ox + col * ct + ct // 2
+        cy = oy + row * ct + ct // 2
+        return cx, cy
+
+    def _cell_center_iso(self, row: int, col: int, *, play: bool = False) -> tuple[int, int]:
+        ox = self.iso_ox
+        oy = self.iso_oy_play if play else ISO_OY_SETUP
+        tw, th = (self.tw_iso, self.th_iso) if play else (TW_ISO, TH_ISO)
+        cx = ox + (col - row) * (tw // 2)
+        cy = oy + (col + row) * (th // 2)
+        return cx, cy
 
     def _layout_menu_buttons(self) -> None:
         self.btn_cpu_cpu = pygame.Rect(80, 140, 280, 40)
@@ -492,6 +633,8 @@ class MotleyCrewsUI:
         else:
             self.phase = "setup_coin"
         self.cpu_timer = 0
+        self.play_log = []
+        self.log_scroll = 0
 
     def _refresh_legal(self) -> None:
         if self.game_state is None or self.game_state.done:
@@ -519,20 +662,27 @@ class MotleyCrewsUI:
     def _commit_turn(self, ta: TurnAction) -> None:
         if not self.game_state:
             return
+        actor = self.game_state.current_player
+        line = format_play_log_line(actor, ta)
+        self.play_log.append(line)
+        if len(self.play_log) > self._log_max_lines:
+            self.play_log = self.play_log[-self._log_max_lines :]
         self.game_state = step(self.game_state, ta).state
         self.cpu_timer = 0
         self._after_step()
 
     def _screen_to_cell(self, pos: tuple[int, int]) -> Optional[tuple[int, int]]:
+        play = self.phase == "play"
         if self.view_mode == ViewMode.TOP_DOWN:
-            return self._screen_to_cell_top(pos)
+            return self._screen_to_cell_top(pos, play=play)
         best: Optional[tuple[int, int]] = None
         best_d = 1e12
+        tr = self._token_r_iso if play else 14
         for r in range(BOARD_SIZE):
             for c in range(BOARD_SIZE):
-                cx, cy = cell_center_iso(r, c)
+                cx, cy = self._cell_center_iso(r, c, play=play)
                 d = (pos[0] - cx) ** 2 + (pos[1] - (cy - 4)) ** 2
-                if d < best_d and d <= 34 * 34:
+                if d < best_d and d <= (tr + 20) ** 2:
                     best_d = d
                     best = (r, c)
         return best
@@ -976,21 +1126,21 @@ class MotleyCrewsUI:
             return pl == TEAM_PLAYER_B
         return False
 
-    @staticmethod
-    def _screen_to_cell_top(pos: tuple[int, int]) -> Optional[tuple[int, int]]:
+    def _screen_to_cell_top(self, pos: tuple[int, int], *, play: bool = False) -> Optional[tuple[int, int]]:
         mx, my = pos
-        ox, oy = board_origin_top()
+        ox, oy = self._board_origin_top(play=play)
+        ct = self.cell_top if play else CELL_TOP
         if mx < ox or my < oy:
             return None
-        c = (mx - ox) // CELL_TOP
-        r = (my - oy) // CELL_TOP
+        c = (mx - ox) // ct
+        r = (my - oy) // ct
         if 0 <= r < BOARD_SIZE and 0 <= c < BOARD_SIZE:
             return (r, c)
         return None
 
     @staticmethod
     def _staging_slot_rect(team: int, slot: int) -> pygame.Rect:
-        ox = board_origin_top()[0]
+        ox = board_origin_top(play=False)[0]
         gap = CELL_TOP
         x = ox + slot * gap + (CELL_TOP - 44) // 2
         if team == TEAM_PLAYER_B:
@@ -1026,9 +1176,7 @@ class MotleyCrewsUI:
         if not legal:
             return
         a = self.cpu.choose(self.game_state, legal, self.rng_cpu)
-        self.game_state = step(self.game_state, a).state
-        self.cpu_timer = 0
-        self._after_step()
+        self._commit_turn(a)
 
     def _after_step(self) -> None:
         if self.game_state is None:
@@ -1047,9 +1195,7 @@ class MotleyCrewsUI:
         a = self.legal_list[i]
         if a not in self.legal_list:
             return
-        self.game_state = step(self.game_state, a).state
-        self.cpu_timer = 0
-        self._after_step()
+        self._commit_turn(a)
 
     def run(self) -> None:
         running = True
@@ -1060,6 +1206,11 @@ class MotleyCrewsUI:
                     running = False
                 elif event.type == pygame.KEYDOWN:
                     self._on_key(event.key)
+                elif event.type == pygame.VIDEORESIZE:
+                    self.win_w = max(800, event.w)
+                    self.win_h = max(600, event.h)
+                    self.screen = pygame.display.set_mode((self.win_w, self.win_h), pygame.RESIZABLE)
+                    self._recompute_layout()
                 elif event.type == pygame.MOUSEBUTTONDOWN:
                     self._on_mouse_down(event.pos, event.button)
                 elif event.type == pygame.MOUSEBUTTONUP:
@@ -1067,12 +1218,27 @@ class MotleyCrewsUI:
                 elif event.type == pygame.MOUSEMOTION:
                     self._on_mouse_motion(event.pos)
                 elif event.type == pygame.MOUSEWHEEL:
-                    if (
-                        self.phase == "play"
-                        and self._is_human_turn()
-                        and self._play_show_fallback_list
-                    ):
-                        self.action_scroll = max(0, self.action_scroll - event.y * 24)
+                    if self.phase == "play":
+                        mx, my = pygame.mouse.get_pos()
+                        if (
+                            self._is_human_turn()
+                            and self._play_show_fallback_list
+                            and pygame.Rect(
+                                self.sidebar_x + 4,
+                                self.legal_list_top,
+                                self.sidebar_w - 8,
+                                self.log_bottom - self.legal_list_top - 50,
+                            ).collidepoint(mx, my)
+                        ):
+                            self.action_scroll = max(0, self.action_scroll - event.y * 24)
+                        elif self._log_clip_rect().collidepoint(mx, my):
+                            self.log_scroll = max(
+                                0,
+                                min(
+                                    self._max_log_scroll(),
+                                    self.log_scroll - event.y * 24,
+                                ),
+                            )
 
             if self.phase == "setup_place" and self.game_state and self.game_state.match_phase == int(
                 MatchPhase.SETUP
@@ -1193,15 +1359,18 @@ class MotleyCrewsUI:
                 cand = [ta for ta in self._turn_candidates if ta.action is None]
                 self._resolve_or_commit(cand)
                 return
-            if self._play_show_fallback_list and mx >= 700:
-                sidebar_top = 96
+            if self._play_show_fallback_list and mx >= self.sidebar_x:
+                list_top = self.legal_list_top + 32
+                list_h = self.log_bottom - self.legal_list_top - 50
                 line_h = 20
-                idx_y = my - sidebar_top + self.action_scroll
-                if idx_y >= 0:
-                    clicked = idx_y // line_h
-                    if 0 <= clicked < len(self.legal_list):
-                        self.selected_idx = clicked
-                if pygame.Rect(720, 640, 200, 36).collidepoint(mx, my):
+                if list_top <= my < list_top + list_h - 8:
+                    idx_y = my - list_top + self.action_scroll
+                    if idx_y >= 0:
+                        clicked = int(idx_y // line_h)
+                        if 0 <= clicked < len(self.legal_list):
+                            self.selected_idx = clicked
+                conf = pygame.Rect(self.sidebar_x + 40, self.log_bottom - 48, 200, 36)
+                if conf.collidepoint(mx, my):
                     self._confirm_human_action()
                 return
             if self._play_menu_items:
@@ -1292,6 +1461,96 @@ class MotleyCrewsUI:
             if cap:
                 self.screen.blit(self.font_small.render(cap, True, (235, 235, 240)), (rect.x + 8, rect.y + 6))
 
+    def _log_clip_rect(self) -> pygame.Rect:
+        if self._play_show_fallback_list:
+            h = max(40, self.legal_list_top - LOG_TOP - 6)
+            return pygame.Rect(self.sidebar_x, LOG_TOP, self.sidebar_w, h)
+        return pygame.Rect(self.sidebar_x, LOG_TOP, self.sidebar_w, self.log_bottom - LOG_TOP)
+
+    def _log_display_lines(self) -> list[str]:
+        clip = self._log_clip_rect()
+        max_w = max(40, clip.width - 12)
+        out: list[str] = []
+        for entry in self.play_log:
+            out.extend(_wrap_text_to_width(self.font_small, entry, max_w))
+        return out
+
+    def _max_log_scroll(self) -> int:
+        clip = self._log_clip_rect()
+        lines = self._log_display_lines()
+        content_h = len(lines) * LOG_LINE_H + 28
+        return max(0, content_h - clip.height)
+
+    @staticmethod
+    def _class_combat_summary(class_id: int) -> str:
+        mv = class_move_value(class_id)
+        rch = class_reach_basic(class_id)
+        a_move = class_basic_damage(class_id, careful_aim_not_moved=False)
+        a_aim = class_basic_damage(class_id, careful_aim_not_moved=True)
+        atk = f"{a_aim}" if a_move == a_aim else f"{a_aim}/{a_move}"
+        sp = CLASS_SPECIALS_DISPLAY[class_id] if 0 <= class_id < len(CLASS_SPECIALS_DISPLAY) else ""
+        return f"m{mv} r{rch} atk{atk} · {sp}"
+
+    @staticmethod
+    def _format_roster_line(u: Optional[UnitState], slot: int) -> str:
+        if u is None:
+            return f"{slot} —"
+        abbr = CLASS_IDS[u.class_id][:3] if 0 <= u.class_id < len(CLASS_IDS) else "?"
+        stats = MotleyCrewsUI._class_combat_summary(u.class_id)
+        if not u.alive:
+            return f"{slot} {abbr} dead · {stats}"
+        extras: list[str] = []
+        if u.containment_ticks > 0:
+            extras.append(f"box={u.containment_ticks}")
+        if u.moved_this_turn:
+            extras.append("moved")
+        if u.used_conjure_containment:
+            extras.append("conj")
+        if u.used_magic_bomb:
+            extras.append("bomb")
+        ex = f" {' '.join(extras)}" if extras else ""
+        stage = "off-board" if u.row < 0 else ""
+        bits = [f"{slot} {abbr}", f"{u.hp}/{u.max_hp}", stats]
+        if stage:
+            bits.append(stage)
+        return " ".join(bits) + ex
+
+    def _draw_flanking_rosters(self, gs: GameState) -> None:
+        y_b = TOP_MARGIN + PLAY_HUD_H
+        panel_b = pygame.Rect(BOARD_OX, y_b, self.board_grid_px, PANEL_B_H)
+        y_a = self.board_oy_play + self.board_grid_px
+        panel_a = pygame.Rect(BOARD_OX, y_a, self.board_grid_px, PANEL_A_H)
+        for rect, title, team, color in (
+            (panel_b, "Player B (north)", TEAM_PLAYER_B, (255, 200, 170)),
+            (panel_a, "Player A (south)", TEAM_PLAYER_A, (170, 190, 255)),
+        ):
+            pygame.draw.rect(self.screen, (40, 42, 52), rect, border_radius=4)
+            pygame.draw.rect(self.screen, (65, 68, 82), rect, 1, border_radius=4)
+            self.screen.blit(self.font_small.render(title, True, color), (rect.x + 8, rect.y + 4))
+            yy = rect.y + 22
+            for sl in range(FIGURES_PER_SIDE):
+                u = slot_unit(gs, team, sl)
+                line = self._format_roster_line(u, sl)
+                if len(line) > 54:
+                    line = line[:51] + "…"
+                self.screen.blit(self.font_small.render(line, True, (200, 202, 215)), (rect.x + 8, yy))
+                yy += 14
+
+    def _draw_play_log(self) -> None:
+        clip = self._log_clip_rect()
+        prev = self.screen.get_clip()
+        self.screen.set_clip(clip)
+        pygame.draw.rect(self.screen, (28, 30, 38), clip, border_radius=4)
+        pygame.draw.rect(self.screen, (55, 58, 70), clip, 1, border_radius=4)
+        self.screen.blit(self.font_small.render("Event log", True, (160, 165, 185)), (clip.x + 8, clip.y + 4))
+        y = clip.y + 22 - self.log_scroll
+        for line in self._log_display_lines():
+            if y + LOG_LINE_H >= clip.y and y <= clip.y + clip.height:
+                surf = self.font_small.render(line, True, (175, 178, 195))
+                self.screen.blit(surf, (clip.x + 6, y))
+            y += LOG_LINE_H
+        self.screen.set_clip(prev)
+
     def _draw(self) -> None:
         self.screen.fill((34, 36, 42))
         if self.phase == "menu":
@@ -1351,7 +1610,7 @@ class MotleyCrewsUI:
     def _draw_setup_choice(self) -> None:
         assert self._coin_flip_winner is not None
         w = self._coin_flip_winner
-        self.screen.blit(self.font.render(f"Player {w} won the toss", True, (240, 240, 245)), (80, 60))
+        self.screen.blit(self.font.render(f"{player_label(w)} won the toss", True, (240, 240, 245)), (80, 60))
         self.screen.blit(
             self.font_small.render(
                 "Choose how to pair setup order with the first move of the game:",
@@ -1372,7 +1631,17 @@ class MotleyCrewsUI:
         )
         self.screen.blit(self.font_small.render("Esc = menu", True, (140, 145, 160)), (80, 520))
 
-    def _blit_token_top(self, cx: int, cy: int, class_id: int, team: int, radius: int = 18) -> None:
+    def _blit_token_top(
+        self,
+        cx: int,
+        cy: int,
+        class_id: int,
+        team: int,
+        radius: int = 18,
+        *,
+        view: ViewMode = ViewMode.TOP_DOWN,
+        draw_marker: bool = True,
+    ) -> None:
         col = CLASS_COLORS[class_id % len(CLASS_COLORS)]
         pygame.draw.circle(self.screen, col, (cx, cy), radius)
         pygame.draw.circle(self.screen, (20, 20, 30), (cx, cy), radius, 2)
@@ -1381,6 +1650,8 @@ class MotleyCrewsUI:
         self.screen.blit(self.font_small.render(label, True, tcol), (cx - 5, cy - 8))
         ring = (120, 160, 255) if team == TEAM_PLAYER_A else (255, 160, 120)
         pygame.draw.circle(self.screen, ring, (cx, cy), radius + 3, 2)
+        if draw_marker:
+            _draw_team_marker(self.screen, cx, cy, team, view=view, radius=radius)
 
     def _draw_setup_place(self) -> None:
         assert self.game_state is not None
@@ -1442,7 +1713,7 @@ class MotleyCrewsUI:
                 self._blit_token_top(self._drag_pos[0], self._drag_pos[1], u.class_id, team_d, radius=16)
 
         pl = gs.setup_current_player
-        hud = f"Place figures — Player {pl}'s turn  |  seed {self.seed}"
+        hud = f"Place figures — {player_label(pl)}'s turn  |  seed {self.seed}"
         if self._is_human_setup_turn():
             hud += "  [drag a piece to a yellow square]"
         else:
@@ -1453,8 +1724,8 @@ class MotleyCrewsUI:
         assert self.game_state is not None
         s = self.game_state
         w = s.winner
-        msg = f"Winner: Player {w}" if w is not None else "Draw"
-        overlay = pygame.Surface((1040, 720), pygame.SRCALPHA)
+        msg = f"Winner: {player_label(w)}" if w is not None else "Draw"
+        overlay = pygame.Surface((self.win_w, self.win_h), pygame.SRCALPHA)
         overlay.fill((0, 0, 0, 170))
         self.screen.blit(overlay, (0, 0))
         self.screen.blit(self.font.render(msg, True, (255, 255, 255)), (400, 300))
@@ -1466,6 +1737,7 @@ class MotleyCrewsUI:
         gs = self.game_state
         obs = to_structured_observation(gs)
         hl_cells, hl_rgba = self._play_highlight()
+        self._draw_flanking_rosters(gs)
         if self.view_mode == ViewMode.TOP_DOWN:
             self._draw_board_top(obs, highlight_cells=hl_cells, hl_rgba=hl_rgba)
         else:
@@ -1475,11 +1747,13 @@ class MotleyCrewsUI:
             u = unit_at(gs, gs.current_player, self._play_slot)
             if u is not None and u.alive:
                 if self.view_mode == ViewMode.TOP_DOWN:
-                    cx, cy = cell_center_top(u.row, u.col)
-                    pygame.draw.circle(self.screen, (255, 220, 60), (cx, cy), 24, 3)
+                    cx, cy = self._cell_center_top(u.row, u.col, play=True)
+                    pr = max(18, int(24 * self.cell_top / max(1, CELL_TOP)))
+                    pygame.draw.circle(self.screen, (255, 220, 60), (cx, cy), pr, 3)
                 else:
-                    cx, cy = cell_center_iso(u.row, u.col)
-                    pygame.draw.circle(self.screen, (255, 220, 60), (cx, cy - 4), 20, 3)
+                    cx, cy = self._cell_center_iso(u.row, u.col, play=True)
+                    pr = max(16, int(20 * self._token_r_iso / max(1, 14)))
+                    pygame.draw.circle(self.screen, (255, 220, 60), (cx, cy - 4), pr, 3)
 
         if (
             self._is_human_turn()
@@ -1489,31 +1763,39 @@ class MotleyCrewsUI:
             u = unit_at(gs, gs.current_player, self._play_move_drag_slot)
             if u is not None:
                 self._blit_token_top(
-                    self._play_drag_xy[0], self._play_drag_xy[1], u.class_id, gs.current_player, radius=16
+                    self._play_drag_xy[0],
+                    self._play_drag_xy[1],
+                    u.class_id,
+                    gs.current_player,
+                    radius=max(12, self._token_r_top - 2),
+                    view=self.view_mode,
                 )
 
         self._draw_play_menus()
 
         flip = (
-            f"coin P{gs.coin_flip_winner}  "
+            f"coin {player_label(gs.coin_flip_winner)}  "
             if gs.coin_flip_winner is not None
             else ""
         )
-        hud = f"P{gs.current_player} turn  |  Score {gs.score[0]} — {gs.score[1]}  |  {flip}seed {self.seed}"
+        hud = f"{player_label(gs.current_player)} turn  |  Score {gs.score[0]} — {gs.score[1]}  |  {flip}seed {self.seed}"
         if self._is_human_turn():
             hud += "  [your turn]"
-        self.screen.blit(self.font.render(hud, True, (220, 220, 230)), (32, 32))
+        self.screen.blit(self.font.render(hud, True, (220, 220, 230)), (BOARD_OX, TOP_MARGIN))
         vm = "iso" if self.view_mode == ViewMode.ISOMETRIC else "top"
-        self.screen.blit(self.font_small.render(f"View: {vm} (V to toggle)", True, (150, 155, 170)), (32, 56))
-        play_hint = (
-            "Move is set — teal = who may act. Click any of them for Basic/Special, or use Pass action. Esc cancels."
-            if self._pending_move is not None
-            else "Board: click piece → Move / Attack / Special. After moving, click who acts (any figure). Tab = list. Esc = cancel."
-        )
         self.screen.blit(
-            self.font_small.render(play_hint, True, (130, 135, 155)),
-            (32, 76),
+            self.font_small.render(f"{vm} view · V  ·  Tab = all legal turns", True, (150, 155, 170)),
+            (self.sidebar_x + 8, TOP_MARGIN + 4),
         )
+
+        self._draw_play_log()
+
+        play_hint = (
+            "Move set — teal = who may act. Pass or Esc cancels."
+            if self._pending_move is not None
+            else "Click piece → Move / Attack / Special. After move, pick who acts. Esc = cancel."
+        )
+        self.screen.blit(self.font_small.render(play_hint, True, (130, 135, 155)), (BOARD_OX, TOP_MARGIN + 22))
 
         if self._is_human_turn() and _pass_turn_in_legal(self.legal_list):
             pygame.draw.rect(self.screen, (70, 90, 70), self.btn_pass_turn, border_radius=4)
@@ -1536,19 +1818,26 @@ class MotleyCrewsUI:
         if self._is_human_turn() and not self.legal_list and not gs.done:
             self.screen.blit(
                 self.font.render("No legal actions (stalemate)", True, (255, 160, 120)),
-                (712, 400),
+                (self.sidebar_x + 8, self.win_h // 2),
             )
 
+        pygame.draw.line(self.screen, (60, 64, 78), (self.sidebar_x, 0), (self.sidebar_x, self.win_h), 2)
+
         if self._is_human_turn() and self.legal_list and self._play_show_fallback_list:
-            x0 = 700
-            pygame.draw.line(self.screen, (60, 64, 78), (x0, 0), (x0, 720), 2)
+            x0 = self.sidebar_x
+            list_top = self.legal_list_top
+            list_h = self.log_bottom - list_top - 50
+            list_rect = pygame.Rect(x0 + 4, list_top, self.sidebar_w - 8, list_h)
+            pygame.draw.rect(self.screen, (32, 34, 44), list_rect, border_radius=4)
+            pygame.draw.rect(self.screen, (75, 80, 100), list_rect, 1, border_radius=4)
             title = self.font.render("All legal turns (Tab to hide)", True, (200, 205, 220))
-            self.screen.blit(title, (x0 + 12, 72))
-            y = 96 - self.action_scroll
+            self.screen.blit(title, (x0 + 12, list_top + 6))
+            y = list_top + 32 - self.action_scroll
+            line_h = 20
             for i, act in enumerate(self.legal_list):
-                if y > 620:
+                if y > list_top + list_h - 8:
                     break
-                if y + 18 >= 96:
+                if y + line_h >= list_top + 28:
                     sel = i == self.selected_idx
                     col = (80, 120, 200) if sel else (200, 200, 210)
                     prefix = "› " if sel else "  "
@@ -1557,9 +1846,10 @@ class MotleyCrewsUI:
                         line = line[:49] + "…"
                     surf = self.font_small.render(f"{i+1}. {line}", True, col)
                     self.screen.blit(surf, (x0 + 8, y))
-                y += 20
-            pygame.draw.rect(self.screen, (100, 140, 200), pygame.Rect(720, 640, 200, 36), border_radius=4)
-            self.screen.blit(self.font.render("Confirm (Enter)", True, (255, 255, 255)), (740, 646))
+                y += line_h
+            conf = pygame.Rect(self.sidebar_x + 40, self.log_bottom - 48, 200, 36)
+            pygame.draw.rect(self.screen, (100, 140, 200), conf, border_radius=4)
+            self.screen.blit(self.font.render("Confirm (Enter)", True, (255, 255, 255)), (conf.x + 20, conf.y + 6))
 
     def _draw_board_top(
         self,
@@ -1569,16 +1859,19 @@ class MotleyCrewsUI:
         hl_rgba: tuple[int, int, int, int] = HL_MOVE,
     ) -> None:
         hl = highlight_cells or set()
-        ox, oy = board_origin_top()
+        ct = self.cell_top
+        tradius = self._token_r_top
+        ox, oy = self._board_origin_top(play=True)
         for r in range(BOARD_SIZE):
             for c in range(BOARD_SIZE):
                 tr = int(obs.terrain[r, c])
-                color = TERRAIN_COLOR.get(tr, (200, 200, 200))
-                rect = pygame.Rect(ox + c * CELL_TOP, oy + r * CELL_TOP, CELL_TOP, CELL_TOP)
+                base = TERRAIN_COLOR.get(tr, (200, 200, 200))
+                color = _checkerboard_tint(base, r, c, tr)
+                rect = pygame.Rect(ox + c * ct, oy + r * ct, ct, ct)
                 pygame.draw.rect(self.screen, color, rect)
                 pygame.draw.rect(self.screen, (55, 58, 70), rect, 1)
                 if (r, c) in hl:
-                    hls = pygame.Surface((CELL_TOP, CELL_TOP), pygame.SRCALPHA)
+                    hls = pygame.Surface((ct, ct), pygame.SRCALPHA)
                     hls.fill(hl_rgba)
                     self.screen.blit(hls, (rect.x, rect.y))
         for r in range(BOARD_SIZE):
@@ -1588,15 +1881,16 @@ class MotleyCrewsUI:
                 tid = int(obs.team[r, c])
                 cid = int(obs.unit_class[r, c])
                 col = CLASS_COLORS[cid % len(CLASS_COLORS)] if tid >= 0 else (150, 150, 150)
-                cx, cy = cell_center_top(r, c)
-                pygame.draw.circle(self.screen, col, (cx, cy), 18)
-                pygame.draw.circle(self.screen, (20, 20, 30), (cx, cy), 18, 2)
+                cx, cy = self._cell_center_top(r, c, play=True)
+                pygame.draw.circle(self.screen, col, (cx, cy), tradius)
+                pygame.draw.circle(self.screen, (20, 20, 30), (cx, cy), tradius, 2)
                 label = CLASS_IDS[cid][0].upper() if 0 <= cid < len(CLASS_IDS) else "?"
                 tcol = (20, 20, 25) if sum(col) > 400 else (250, 250, 255)
                 self.screen.blit(self.font_small.render(label, True, tcol), (cx - 5, cy - 8))
-                # team tint
                 ring = (120, 160, 255) if tid == TEAM_PLAYER_A else (255, 160, 120)
-                pygame.draw.circle(self.screen, ring, (cx, cy), 21, 2)
+                pygame.draw.circle(self.screen, ring, (cx, cy), tradius + 3, 2)
+                if tid >= 0:
+                    _draw_team_marker(self.screen, cx, cy, tid, view=ViewMode.TOP_DOWN, radius=tradius)
 
     def _draw_board_iso(
         self,
@@ -1612,19 +1906,22 @@ class MotleyCrewsUI:
             for c in range(BOARD_SIZE):
                 cells.append((r + c, c, r, int(obs.terrain[r, c])))
         cells.sort(key=lambda x: (x[0], x[2]))
+        tw, th = self.tw_iso, self.th_iso
+        ir = self._token_r_iso
         for _, c, r, tr in cells:
-            cx, cy = cell_center_iso(r, c)
-            color = TERRAIN_COLOR.get(tr, (200, 200, 200))
+            cx, cy = self._cell_center_iso(r, c, play=True)
+            base = TERRAIN_COLOR.get(tr, (200, 200, 200))
+            color = _checkerboard_tint(base, r, c, tr)
             pts = [
-                (cx, cy - TH_ISO // 2),
-                (cx + TW_ISO // 2, cy),
-                (cx, cy + TH_ISO // 2),
-                (cx - TW_ISO // 2, cy),
+                (cx, cy - th // 2),
+                (cx + tw // 2, cy),
+                (cx, cy + th // 2),
+                (cx - tw // 2, cy),
             ]
             pygame.draw.polygon(self.screen, color, pts)
             pygame.draw.polygon(self.screen, (55, 58, 70), pts, 1)
             if (r, c) in hl:
-                pygame.draw.circle(self.screen, hl_rgba[:3], (cx, cy - 2), 22, 3)
+                pygame.draw.circle(self.screen, hl_rgba[:3], (cx, cy - 2), ir + 8, 3)
         unit_cells: list[tuple[int, int]] = []
         for r in range(BOARD_SIZE):
             for c in range(BOARD_SIZE):
@@ -1635,14 +1932,17 @@ class MotleyCrewsUI:
             tid = int(obs.team[r, c])
             cid = int(obs.unit_class[r, c])
             col = CLASS_COLORS[cid % len(CLASS_COLORS)] if tid >= 0 else (150, 150, 150)
-            cx, cy = cell_center_iso(r, c)
-            pygame.draw.circle(self.screen, col, (cx, cy - 4), 14)
-            pygame.draw.circle(self.screen, (20, 20, 30), (cx, cy - 4), 14, 2)
+            cx, cy = self._cell_center_iso(r, c, play=True)
+            ty = cy - 4
+            pygame.draw.circle(self.screen, col, (cx, ty), ir)
+            pygame.draw.circle(self.screen, (20, 20, 30), (cx, ty), ir, 2)
             label = CLASS_IDS[cid][0].upper() if 0 <= cid < len(CLASS_IDS) else "?"
             tcol = (20, 20, 25) if sum(col) > 400 else (250, 250, 255)
             self.screen.blit(self.font_small.render(label, True, tcol), (cx - 5, cy - 14))
             ring = (120, 160, 255) if tid == TEAM_PLAYER_A else (255, 160, 120)
-            pygame.draw.circle(self.screen, ring, (cx, cy - 4), 17, 2)
+            pygame.draw.circle(self.screen, ring, (cx, ty), ir + 3, 2)
+            if tid >= 0:
+                _draw_team_marker(self.screen, cx, ty, tid, view=ViewMode.ISOMETRIC, radius=ir)
 
 
 def run(seed: int = 0) -> None:
