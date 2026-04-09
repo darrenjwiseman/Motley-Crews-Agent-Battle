@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import random
 import sys
+from dataclasses import dataclass
 from enum import IntEnum
 from io import BytesIO
 from pathlib import Path
@@ -87,6 +88,7 @@ from motley_crews_play.formatting import (
     format_turn_action,
     player_label,
 )
+from motley_crews_play.highlight_geometry import path_cells_for_turn, preview_emphasis_cells
 from motley_crews_play.policies import ScriptedHeuristicPolicy
 
 
@@ -249,6 +251,90 @@ HL_MOVE = (80, 180, 255, 72)
 HL_ATTACK = (255, 140, 90, 72)
 HL_SPECIAL = (200, 130, 255, 72)
 HL_ACTION_FIGURE = (100, 210, 170, 68)
+HL_PATH = (255, 230, 140, 200)
+
+FX_MS_DAMAGE = 2000.0
+FX_MS_HEAL = 2200.0
+PLAY_HOLD_MS = 200
+
+
+@dataclass
+class BoardHighlightSpec:
+    """Range tint plus optional path / emphasis overlay; optional board for move preview."""
+
+    range_cells: set[tuple[int, int]]
+    range_rgba: tuple[int, int, int, int]
+    path_cells: set[tuple[int, int]]
+    path_rgba: tuple[int, int, int, int]
+    board_override: Optional[GameState] = None
+
+
+def _preview_phase_index(timer: float, total_ms: float) -> int:
+    if total_ms <= 0:
+        return 2
+    frac = timer / total_ms
+    if frac < 0.35:
+        return 0
+    if frac < 0.70:
+        return 1
+    return 2
+
+
+def _range_cells_for_action_only(
+    legal: list[TurnAction], ta: TurnAction
+) -> tuple[set[tuple[int, int]], tuple[int, int, int, int]]:
+    """Attack/special target range only (used when the turn includes both move and action)."""
+    assert ta.action is not None
+    if isinstance(ta.action, ActionBasicAttack):
+        return _basic_targets_for_slot(legal, ta.action.actor_slot), HL_ATTACK
+    sp = ta.action
+    assert isinstance(sp, ActionSpecial)
+    sid = int(sp.special_id)
+    slot = sp.actor_slot
+    if sid == int(SpecialId.MAGIC_BOMB) and sp.target_square is not None:
+        tr, tc = sp.target_square
+        cells: set[tuple[int, int]] = set()
+        for br, bc in ((tr, tc), (tr + 1, tc), (tr - 1, tc), (tr, tc + 1), (tr, tc - 1)):
+            if 0 <= br < BOARD_SIZE and 0 <= bc < BOARD_SIZE:
+                cells.add((br, bc))
+        return cells, HL_SPECIAL
+    return _special_target_cells(legal, slot, sid), HL_SPECIAL
+
+
+def _range_cells_for_turn(gs: GameState, legal: list[TurnAction], ta: TurnAction) -> tuple[set[tuple[int, int]], tuple[int, int, int, int]]:
+    """Full legal range for the component of the turn being previewed (phase A)."""
+    if ta.resurrect_place is not None:
+        return {ta.resurrect_place}, (255, 220, 80, 88)
+    # Move+action: do not repeat move-destination highlights during action preview phases
+    if ta.move is not None and ta.action is not None:
+        return _range_cells_for_action_only(legal, ta)
+    if ta.move is not None:
+        return _move_destinations_for_slot(legal, ta.move.actor_slot), HL_MOVE
+    if ta.action is None:
+        return set(), HL_MOVE
+    return _range_cells_for_action_only(legal, ta)
+
+
+def _build_preview_spec(
+    gs: GameState,
+    legal: list[TurnAction],
+    ta: TurnAction,
+    timer: float,
+    total_ms: float,
+) -> BoardHighlightSpec:
+    """Phased highlights: range (0), path (1), preview board + emphasis (2)."""
+    pl = gs.current_player
+    phase = _preview_phase_index(timer, total_ms)
+    empty: set[tuple[int, int]] = set()
+    if phase == 0:
+        rng, rgba = _range_cells_for_turn(gs, legal, ta)
+        return BoardHighlightSpec(rng, rgba, empty, HL_PATH, None)
+    if phase == 1:
+        path = path_cells_for_turn(gs, pl, ta)
+        return BoardHighlightSpec(empty, HL_MOVE, path, HL_PATH, None)
+    bo = preview_after_move(gs, ta.move) if ta.move is not None else None
+    em = preview_emphasis_cells(gs, pl, ta)
+    return BoardHighlightSpec(empty, HL_MOVE, em, HL_PATH, bo)
 
 
 def _actor_slot_at_cell(gs: GameState, r: int, c: int) -> Optional[int]:
@@ -582,6 +668,7 @@ class MotleyCrewsUI:
         self.clock = pygame.time.Clock()
         self.font = pygame.font.SysFont("Menlo", 18) if sys.platform == "darwin" else pygame.font.SysFont("Consolas", 18)
         self.font_small = pygame.font.SysFont("Menlo", 15) if sys.platform == "darwin" else pygame.font.SysFont("Consolas", 15)
+        self.font_fx = pygame.font.SysFont("Menlo", 26) if sys.platform == "darwin" else pygame.font.SysFont("Consolas", 26)
         self.seed = seed
         self.rng_cpu = random.Random(seed)
 
@@ -596,6 +683,11 @@ class MotleyCrewsUI:
         self.action_scroll = 0
         self.cpu_timer = 0
         self.cpu_delay_ms = 2000
+        self._cpu_pending_action: Optional[TurnAction] = None
+        self._human_anim_ta: Optional[TurnAction] = None
+        self._human_anim_timer: Optional[float] = None
+        self._human_anim_mode: Optional[str] = None  # "commit" | "move_pick"
+        self._human_anim_cand: list[TurnAction] = []
 
         # Interactive setup (human modes): coin → choice → drag-drop placement
         self._coin_flip_winner: Optional[int] = None
@@ -625,8 +717,11 @@ class MotleyCrewsUI:
         self.play_log: list[str] = []
         self.log_scroll: int = 0
         self._log_max_lines = 400
-        # (row, col, total_damage, remaining_ms) for floating hit numbers
-        self._damage_fx: list[tuple[int, int, int, float]] = []
+        # (kind, row, col, amount, remaining_ms); kind "dmg" | "heal"
+        self._damage_fx: list[tuple[str, int, int, int, float]] = []
+        self._idle_press_slot: Optional[int] = None
+        self._idle_press_tick: int = 0
+        self._idle_press_pos: Optional[tuple[int, int]] = None
         self._menu_hover_key: Optional[str] = None
         self._menu_sticky_key: Optional[str] = "cpu"
         self.btn_return_menu: pygame.Rect = pygame.Rect(0, 0, 1, 1)
@@ -838,9 +933,16 @@ class MotleyCrewsUI:
         else:
             self.phase = "setup_coin"
         self.cpu_timer = 0
+        self._cpu_pending_action = None
+        self._human_anim_ta = None
+        self._human_anim_timer = None
+        self._human_anim_mode = None
+        self._human_anim_cand = []
         self.play_log = []
         self.log_scroll = 0
         self._damage_fx = []
+        self._idle_press_slot = None
+        self._idle_press_pos = None
 
     def _refresh_legal(self) -> None:
         if self.game_state is None or self.game_state.done:
@@ -867,6 +969,12 @@ class MotleyCrewsUI:
         self._play_board_preview = None
         self._play_menu_anchor_slot = None
         self._turn_candidates = []
+        self._idle_press_slot = None
+        self._idle_press_pos = None
+        self._human_anim_ta = None
+        self._human_anim_timer = None
+        self._human_anim_mode = None
+        self._human_anim_cand = []
 
     def _state_for_board(self) -> GameState:
         """Board rendering and cell hit-testing while a move is previewed before the action sub-step."""
@@ -921,6 +1029,7 @@ class MotleyCrewsUI:
     def _commit_turn(self, ta: TurnAction) -> None:
         if not self.game_state:
             return
+        self._cpu_pending_action = None
         actor = self.game_state.current_player
         line = format_play_log_line(actor, ta)
         sr = step(self.game_state, ta)
@@ -931,13 +1040,10 @@ class MotleyCrewsUI:
         if len(self.play_log) > self._log_max_lines:
             self.play_log = self.play_log[-self._log_max_lines :]
         self.game_state = sr.state
-        # Aggregate damage markers per cell for this step
-        by_cell: dict[tuple[int, int], int] = {}
         for ev in sr.damage_events:
-            k = (ev.row, ev.col)
-            by_cell[k] = by_cell.get(k, 0) + ev.amount
-        for (r, c), amt in by_cell.items():
-            self._damage_fx.append((r, c, amt, 1000.0))
+            self._damage_fx.append(("dmg", ev.row, ev.col, ev.amount, FX_MS_DAMAGE))
+        for ev in sr.heal_events:
+            self._damage_fx.append(("heal", ev.row, ev.col, ev.amount, FX_MS_HEAL))
         self.cpu_timer = 0
         self._after_step()
 
@@ -957,15 +1063,10 @@ class MotleyCrewsUI:
                     best = (r, c)
         return best
 
-    def _play_highlight(self) -> tuple[set[tuple[int, int]], tuple[int, int, int, int]]:
-        """Cells to tint on the board for the current play sub-mode."""
+    def _interactive_play_highlight(self) -> tuple[set[tuple[int, int]], tuple[int, int, int, int]]:
+        """Cells to tint on the board for the current human play sub-mode (single layer)."""
         empty: set[tuple[int, int]] = set()
-        if (
-            self.phase != "play"
-            or not self.game_state
-            or not self._is_human_turn()
-            or not self.legal_list
-        ):
+        if self.phase != "play" or not self.game_state or not self.legal_list:
             return empty, HL_MOVE
         gs = self.game_state
         if gs.pending_resurrect is not None:
@@ -1010,6 +1111,26 @@ class MotleyCrewsUI:
         if slot is None:
             return empty, HL_MOVE
         return empty, HL_MOVE
+
+    def _board_highlights(self) -> BoardHighlightSpec:
+        """Range + path layers; phased preview for CPU and human commit animation."""
+        empty: set[tuple[int, int]] = set()
+        if self.phase != "play" or not self.game_state or not self.legal_list:
+            return BoardHighlightSpec(empty, HL_MOVE, empty, HL_PATH, None)
+        gs = self.game_state
+        legal = self.legal_list
+        total_ms = float(self.cpu_delay_ms)
+        if self._human_anim_timer is not None and self._is_human_turn() and self._human_anim_ta is not None:
+            return _build_preview_spec(gs, legal, self._human_anim_ta, self._human_anim_timer, total_ms)
+        if not self._is_human_turn() and self._cpu_pending_action is not None:
+            return _build_preview_spec(gs, legal, self._cpu_pending_action, float(self.cpu_timer), total_ms)
+        hl_cells, hl_rgba = self._interactive_play_highlight()
+        return BoardHighlightSpec(hl_cells, hl_rgba, empty, HL_PATH, None)
+
+    def _board_state_for_draw(self, spec: BoardHighlightSpec) -> GameState:
+        if spec.board_override is not None:
+            return spec.board_override
+        return self._state_for_board()
 
     def _open_piece_menu(self, slot: int) -> None:
         legal = self.legal_list
@@ -1170,10 +1291,34 @@ class MotleyCrewsUI:
     def _resolve_or_commit(self, candidates: list[TurnAction]) -> None:
         if not candidates:
             return
-        if len(candidates) == 1:
-            self._commit_turn(candidates[0])
-        else:
+        if len(candidates) > 1:
             self._open_ambiguous_menu(candidates)
+            return
+        self._human_anim_ta = candidates[0]
+        self._human_anim_mode = "commit"
+        self._human_anim_cand = []
+        self._human_anim_timer = 0.0
+
+    def _queue_move_pick_animation(self, cand: list[TurnAction]) -> None:
+        if not cand:
+            return
+        self._human_anim_ta = cand[0]
+        self._human_anim_cand = cand
+        self._human_anim_mode = "move_pick"
+        self._human_anim_timer = 0.0
+
+    def _finalize_human_preview(self) -> None:
+        ta = self._human_anim_ta
+        mode = self._human_anim_mode
+        cand = list(self._human_anim_cand)
+        self._human_anim_ta = None
+        self._human_anim_timer = None
+        self._human_anim_mode = None
+        self._human_anim_cand = []
+        if mode == "move_pick" and cand:
+            self._finish_move_destination_pick(cand)
+        elif mode == "commit" and ta is not None:
+            self._commit_turn(ta)
 
     def _handle_play_menu_click(self, mx: int, my: int) -> bool:
         for rect, tag, _extra in self._play_menu_items:
@@ -1287,7 +1432,7 @@ class MotleyCrewsUI:
             if tag.startswith("pick_turn:"):
                 idx = int(tag.split(":")[1])
                 if 0 <= idx < len(self._play_ambiguous):
-                    self._commit_turn(self._play_ambiguous[idx])
+                    self._resolve_or_commit([self._play_ambiguous[idx]])
                 return True
         return False
 
@@ -1303,7 +1448,7 @@ class MotleyCrewsUI:
                 return False
             ta = TurnAction(move=None, action=None, resurrect_place=cell)
             if ta in legal:
-                self._commit_turn(ta)
+                self._resolve_or_commit([ta])
                 return True
             return False
         cell = self._screen_to_cell((mx, my))
@@ -1331,7 +1476,7 @@ class MotleyCrewsUI:
             if dest not in _move_destinations_for_slot(legal, self._play_slot):
                 return False
             cand = _turns_for_move_dest(legal, self._play_slot, dest)
-            self._finish_move_destination_pick(cand)
+            self._queue_move_pick_animation(cand)
             return True
 
         if self._play_ui_mode == "basic_pick":
@@ -1484,14 +1629,6 @@ class MotleyCrewsUI:
             self.phase = "play"
             self._refresh_legal()
 
-    def _step_cpu(self) -> None:
-        assert self.game_state is not None
-        legal = legal_actions(self.game_state)
-        if not legal:
-            return
-        a = self.cpu.choose(self.game_state, legal, self.rng_cpu)
-        self._commit_turn(a)
-
     def _after_step(self) -> None:
         if self.game_state is None:
             return
@@ -1511,7 +1648,7 @@ class MotleyCrewsUI:
         a = self.legal_list[i]
         if a not in self.legal_list:
             return
-        self._commit_turn(a)
+        self._resolve_or_commit([a])
 
     def run(self) -> None:
         running = True
@@ -1557,12 +1694,33 @@ class MotleyCrewsUI:
                             )
 
             if self._damage_fx:
-                new_fx: list[tuple[int, int, int, float]] = []
-                for r, c, amt, rem in self._damage_fx:
+                new_fx: list[tuple[str, int, int, int, float]] = []
+                for row in self._damage_fx:
+                    kind, r, c, amt, rem = row
                     rem -= dt
                     if rem > 0:
-                        new_fx.append((r, c, amt, rem))
+                        new_fx.append((kind, r, c, amt, rem))
                 self._damage_fx = new_fx
+
+            if self.phase == "play" and self._human_anim_timer is not None:
+                self._human_anim_timer += dt
+                if self._human_anim_timer >= self.cpu_delay_ms:
+                    self._finalize_human_preview()
+
+            if (
+                self.phase == "play"
+                and self._idle_press_slot is not None
+                and self._play_ui_mode == "idle"
+                and self.game_state
+                and self._is_human_turn()
+            ):
+                if pygame.time.get_ticks() - self._idle_press_tick >= PLAY_HOLD_MS:
+                    sl = self._idle_press_slot
+                    if _move_destinations_for_slot(self.legal_list, sl):
+                        self._play_slot = sl
+                        self._play_ui_mode = "move_pick"
+                        self._idle_press_slot = None
+                        self._idle_press_pos = None
 
             if self.phase == "setup_place" and self.game_state and self.game_state.match_phase == int(
                 MatchPhase.SETUP
@@ -1574,10 +1732,21 @@ class MotleyCrewsUI:
 
             if self.phase == "play" and self.game_state and not self.game_state.done:
                 if not self._is_human_turn():
-                    self.cpu_timer += dt
-                    if self.cpu_timer >= self.cpu_delay_ms:
+                    if self._cpu_pending_action is None and self.legal_list:
+                        self._cpu_pending_action = self.cpu.choose(
+                            self.game_state, self.legal_list, self.rng_cpu
+                        )
                         self.cpu_timer = 0
-                        self._step_cpu()
+                    elif self._cpu_pending_action is not None:
+                        self.cpu_timer += dt
+                        if self.cpu_timer >= self.cpu_delay_ms:
+                            ta = self._cpu_pending_action
+                            self._cpu_pending_action = None
+                            self.cpu_timer = 0
+                            self._commit_turn(ta)
+                else:
+                    self.cpu_timer = 0
+                    self._cpu_pending_action = None
 
             self._draw()
             pygame.display.flip()
@@ -1680,8 +1849,10 @@ class MotleyCrewsUI:
 
         if self.phase == "play" and self.game_state and self._is_human_turn() and button == 1:
             mx, my = pos
+            if self._human_anim_timer is not None:
+                return
             if self.btn_pass_turn.collidepoint(mx, my) and _pass_turn_in_legal(self.legal_list):
-                self._commit_turn(TurnAction(move=None, action=None))
+                self._resolve_or_commit([TurnAction(move=None, action=None)])
                 return
             if (
                 self.btn_pass_action_after_move.collidepoint(mx, my)
@@ -1710,6 +1881,20 @@ class MotleyCrewsUI:
                     return
                 if not self._point_in_play_menu(mx, my):
                     self._reset_play_interaction()
+            if (
+                self._play_ui_mode == "idle"
+                and self._pending_move is None
+                and self.game_state
+                and self.game_state.pending_resurrect is None
+            ):
+                cell = self._screen_to_cell(pos)
+                if cell is not None:
+                    slot = _actor_slot_at_cell(self.game_state, cell[0], cell[1])
+                    if slot is not None:
+                        self._idle_press_slot = slot
+                        self._idle_press_tick = pygame.time.get_ticks()
+                        self._idle_press_pos = (mx, my)
+                        return
             if self._handle_play_board_click(mx, my):
                 return
             if (
@@ -1744,6 +1929,24 @@ class MotleyCrewsUI:
             self._drag_pos = pos
         elif self.phase == "play" and self._play_move_drag_slot is not None:
             self._play_drag_xy = pos
+        elif (
+            self.phase == "play"
+            and self._idle_press_slot is not None
+            and self._play_ui_mode == "idle"
+            and self._idle_press_pos is not None
+        ):
+            mx, my = pos
+            if abs(mx - self._idle_press_pos[0]) + abs(my - self._idle_press_pos[1]) > 8:
+                sl = self._idle_press_slot
+                if (
+                    self.game_state
+                    and self._is_human_turn()
+                    and _move_destinations_for_slot(self.legal_list, sl)
+                ):
+                    self._play_slot = sl
+                    self._play_ui_mode = "move_pick"
+                    self._idle_press_slot = None
+                    self._idle_press_pos = None
 
     def _on_mouse_up(self, pos: tuple[int, int], button: int) -> None:
         if button != 1:
@@ -1766,9 +1969,14 @@ class MotleyCrewsUI:
                 cell = self._screen_to_cell(pos)
                 if cell and cell in _move_destinations_for_slot(self.legal_list, self._play_slot):
                     cand = _turns_for_move_dest(self.legal_list, self._play_slot, cell)
-                    self._finish_move_destination_pick(cand)
+                    self._queue_move_pick_animation(cand)
             self._play_move_drag_slot = None
             self._play_drag_xy = None
+        if self.phase == "play" and self._idle_press_slot is not None:
+            if self._play_ui_mode == "idle":
+                self._open_piece_menu(self._idle_press_slot)
+            self._idle_press_slot = None
+            self._idle_press_pos = None
 
     @staticmethod
     def _play_menu_button_caption(tag: str) -> str:
@@ -2120,29 +2328,47 @@ class MotleyCrewsUI:
         )
 
     def _draw_damage_fx(self) -> None:
-        for r, c, amt, rem in self._damage_fx:
-            alpha = min(255, int(255 * (rem / 1000.0)))
-            col = (255, min(255, 70 + (255 - alpha) // 4), 60)
+        for kind, r, c, amt, rem in self._damage_fx:
+            base_ms = FX_MS_DAMAGE if kind == "dmg" else FX_MS_HEAL
+            alpha = min(255, int(255 * (rem / base_ms)))
+            if kind == "dmg":
+                col = (255, min(255, 70 + (255 - alpha) // 4), 60)
+                txt_s = f"−{amt}"
+            else:
+                col = (120, 255, 160)
+                txt_s = f"+{amt}"
             if self.view_mode == ViewMode.TOP_DOWN:
                 cx, cy = self._cell_center_top(r, c, play=True)
             else:
                 cx, cy = self._cell_center_iso(r, c, play=True)
                 cy -= 4
-            txt = self.font.render(f"−{amt}", True, col)
+            txt = self.font_fx.render(txt_s, True, col)
             txt.set_alpha(alpha)
-            self.screen.blit(txt, (cx - txt.get_width() // 2, cy - 26))
+            self.screen.blit(txt, (cx - txt.get_width() // 2, cy - 32))
 
     def _draw_play(self) -> None:
         assert self.game_state is not None
         gs = self.game_state
-        gs_board = self._state_for_board()
+        spec = self._board_highlights()
+        gs_board = self._board_state_for_draw(spec)
         obs = to_structured_observation(gs_board)
-        hl_cells, hl_rgba = self._play_highlight()
         self._draw_flanking_rosters(gs_board)
         if self.view_mode == ViewMode.TOP_DOWN:
-            self._draw_board_top(obs, highlight_cells=hl_cells, hl_rgba=hl_rgba)
+            self._draw_board_top(
+                obs,
+                highlight_cells=spec.range_cells,
+                hl_rgba=spec.range_rgba,
+                path_cells=spec.path_cells,
+                path_rgba=spec.path_rgba,
+            )
         else:
-            self._draw_board_iso(obs, highlight_cells=hl_cells, hl_rgba=hl_rgba)
+            self._draw_board_iso(
+                obs,
+                highlight_cells=spec.range_cells,
+                hl_rgba=spec.range_rgba,
+                path_cells=spec.path_cells,
+                path_rgba=spec.path_rgba,
+            )
 
         self._draw_damage_fx()
 
@@ -2281,8 +2507,11 @@ class MotleyCrewsUI:
         *,
         highlight_cells: Optional[set[tuple[int, int]]] = None,
         hl_rgba: tuple[int, int, int, int] = HL_MOVE,
+        path_cells: Optional[set[tuple[int, int]]] = None,
+        path_rgba: tuple[int, int, int, int] = HL_PATH,
     ) -> None:
         hl = highlight_cells or set()
+        pl = path_cells or set()
         ct = self.cell_top
         tradius = self._token_r_top
         ox, oy = self._board_origin_top(play=True)
@@ -2298,6 +2527,11 @@ class MotleyCrewsUI:
                     hls = pygame.Surface((ct, ct), pygame.SRCALPHA)
                     hls.fill(hl_rgba)
                     self.screen.blit(hls, (rect.x, rect.y))
+                if (r, c) in pl:
+                    hlp = pygame.Surface((ct, ct), pygame.SRCALPHA)
+                    hlp.fill(path_rgba)
+                    self.screen.blit(hlp, (rect.x, rect.y))
+                    pygame.draw.rect(self.screen, path_rgba[:3], rect, 3)
         for r in range(BOARD_SIZE):
             for c in range(BOARD_SIZE):
                 if float(obs.occupancy[r, c]) < 0.5:
@@ -2318,8 +2552,11 @@ class MotleyCrewsUI:
         *,
         highlight_cells: Optional[set[tuple[int, int]]] = None,
         hl_rgba: tuple[int, int, int, int] = HL_MOVE,
+        path_cells: Optional[set[tuple[int, int]]] = None,
+        path_rgba: tuple[int, int, int, int] = HL_PATH,
     ) -> None:
         hl = highlight_cells or set()
+        pl = path_cells or set()
         # painter: lower screen rows first (higher r+c)
         cells: list[tuple[int, int, int, int]] = []
         for r in range(BOARD_SIZE):
@@ -2342,6 +2579,8 @@ class MotleyCrewsUI:
             pygame.draw.polygon(self.screen, (55, 58, 70), pts, 1)
             if (r, c) in hl:
                 pygame.draw.circle(self.screen, hl_rgba[:3], (cx, cy - 2), ir + 8, 3)
+            if (r, c) in pl:
+                pygame.draw.circle(self.screen, path_rgba[:3], (cx, cy - 2), ir + 11, 4)
         unit_cells: list[tuple[int, int]] = []
         for r in range(BOARD_SIZE):
             for c in range(BOARD_SIZE):

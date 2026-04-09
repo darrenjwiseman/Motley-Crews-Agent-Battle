@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import numpy as np
 
-from motley_crews_env.constants import TERRAIN_OPEN
-from motley_crews_env.engine import legal_actions, scenario_from_placements, step
-from motley_crews_env.state import slot_unit, unit_at
+from motley_crews_env.constants import FIGURES_PER_SIDE, TEAM_PLAYER_A, TEAM_PLAYER_B, TERRAIN_OPEN
+from motley_crews_env.engine import _sync_vp_from_units, legal_actions, scenario_from_placements, step
+from motley_crews_env.state import UnitState, slot_unit, unit_at
 from motley_crews_env.types import ActionSpecial, ClassId, SpecialId, TeamId, TurnAction
 
 
@@ -38,6 +38,60 @@ def test_curse_simultaneous_lethal() -> None:
     s2 = step(s, ta).state
     assert unit_at(s2, 0, 3) is None
     assert unit_at(s2, 1, 0) is None
+
+
+def test_curse_simultaneous_threshold_draw() -> None:
+    """Both players reach win threshold in one curse — draw (winner None)."""
+    terrain = np.full((8, 8), TERRAIN_OPEN, dtype=np.int8)
+    s = scenario_from_placements(
+        terrain=terrain,
+        placements=[
+            (0, 3, 2, 2, int(ClassId.BLACK_MAGE)),
+            (1, 0, 2, 4, int(ClassId.KNIGHT)),
+        ],
+        current_player=int(TeamId.PLAYER_A),
+    )
+    for sl in (0, 1, 2):
+        s.units[TEAM_PLAYER_A * FIGURES_PER_SIDE + sl] = UnitState(
+            class_id=int(ClassId.KNIGHT),
+            hp=0,
+            max_hp=7,
+            row=-1,
+            col=sl,
+            controller=TEAM_PLAYER_A,
+            alive=False,
+        )
+    for sl in (1, 2, 3):
+        s.units[TEAM_PLAYER_B * FIGURES_PER_SIDE + sl] = UnitState(
+            class_id=int(ClassId.KNIGHT),
+            hp=0,
+            max_hp=7,
+            row=-1,
+            col=sl,
+            controller=TEAM_PLAYER_B,
+            alive=False,
+        )
+    _sync_vp_from_units(s)
+    assert s.score == (3, 3)
+    k = unit_at(s, 1, 0)
+    assert k is not None
+    bm = unit_at(s, 0, 3)
+    assert bm is not None
+    k.hp = 4
+    x = bm.hp
+    ta = TurnAction(
+        move=None,
+        action=ActionSpecial(
+            actor_slot=3,
+            special_id=SpecialId.CURSE,
+            target_square=(2, 4),
+            curse_x=x,
+        ),
+    )
+    sr = step(s, ta)
+    assert sr.state.done
+    assert sr.state.winner is None
+    assert sr.state.score[0] >= 4 and sr.state.score[1] >= 4
 
 
 def test_convert_changes_controller() -> None:
@@ -173,7 +227,8 @@ def test_animate_dead_revives_and_score_refund() -> None:
     s.board[k.row, k.col] = -1
     k.alive = False
     k.death_point_recipient = 1  # team B received kill credit when knight died
-    s.score = (0, 1)
+    _sync_vp_from_units(s)
+    assert s.score == (0, 1)
 
     ta = TurnAction(
         move=None,

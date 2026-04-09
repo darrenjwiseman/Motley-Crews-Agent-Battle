@@ -30,6 +30,7 @@ from motley_crews_env.constants import (
 from motley_crews_env.state import (
     DamageEvent,
     GameState,
+    HealEvent,
     IllegalActionError,
     StepResult,
     UnitState,
@@ -270,16 +271,31 @@ def _kill_unit(s: GameState, team: int, slot: int) -> None:
     r, c = u.row, u.col
     s.board[r, c] = -1
     u.alive = False
-    recipient = opponent(u.controller)
-    sc = list(s.score)
-    sc[recipient] += 1
-    s.score = (sc[0], sc[1])
-    u.death_point_recipient = recipient
+    u.death_point_recipient = opponent(u.controller)
+
+
+def _sync_vp_from_units(s: GameState) -> None:
+    """Recompute tournament VP: one point per dead figure to the opponent of its controller."""
+    sa = sb = 0
+    for t in (TEAM_PLAYER_A, TEAM_PLAYER_B):
+        for sl in range(FIGURES_PER_SIDE):
+            u = slot_unit(s, t, sl)
+            if u is None or u.alive:
+                continue
+            rec = opponent(u.controller)
+            if rec == TEAM_PLAYER_A:
+                sa += 1
+            else:
+                sb += 1
+    s.score = (sa, sb)
 
 
 def _check_win(s: GameState) -> None:
     sa, sb = s.score
     thr = s.points_to_win
+    if sa >= thr and sb >= thr:
+        s.done, s.winner = True, None
+        return
     if sa >= thr:
         s.done, s.winner = True, TEAM_PLAYER_A
         return
@@ -617,7 +633,10 @@ def _resolve_charge(
 
 
 def _resolve_special(
-    s: GameState, sp: ActionSpecial, damage_events: Optional[list[DamageEvent]] = None
+    s: GameState,
+    sp: ActionSpecial,
+    damage_events: Optional[list[DamageEvent]] = None,
+    heal_events: Optional[list[HealEvent]] = None,
 ) -> None:
     pl = s.current_player
     u = _actor_unit(s, pl, sp.actor_slot)
@@ -705,7 +724,19 @@ def _resolve_special(
         # does not match current_player slot conventions.
         if ou is u:
             raise IllegalActionError("heal target")
+        prev_hp = ou.hp
         ou.hp = min(ou.max_hp, ou.hp + 3)
+        gained = ou.hp - prev_hp
+        if heal_events is not None and gained > 0:
+            heal_events.append(
+                HealEvent(
+                    row=ou.row,
+                    col=ou.col,
+                    amount=gained,
+                    target_team=oteam,
+                    target_slot=osl,
+                )
+            )
         return
 
     if sid == SpecialId.CONJURE_CONTAINMENT:
@@ -794,7 +825,9 @@ def _resolve_special(
             if tid < 0:
                 continue
             oteam, osl = linear_to_team_slot(tid)
-            _apply_damage_to_unit(s, oteam, osl, 2, source_class_for_fear=u.class_id)
+            _apply_damage_to_unit(
+                s, oteam, osl, 2, source_class_for_fear=u.class_id, damage_events=damage_events
+            )
         return
 
     if sid == SpecialId.ANIMATE_DEAD:
@@ -811,7 +844,6 @@ def _resolve_special(
         _apply_damage_to_unit(s, pl, sp.actor_slot, 1, source_class_for_fear=None, damage_events=damage_events)
         if unit_at(s, pl, sp.actor_slot) is None:
             return
-        rec = du.death_point_recipient
         du.alive = True
         du.hp = 2
         du.controller = pl
@@ -819,11 +851,6 @@ def _resolve_special(
         du.containment_ticks = 0
         du.death_point_recipient = None
         s.pending_resurrect = (pl, osl)
-        if rec is not None:
-            sc = list(s.score)
-            if sc[rec] > 0:
-                sc[rec] -= 1
-            s.score = (sc[0], sc[1])
         return
 
     raise IllegalActionError("unknown special")
@@ -976,14 +1003,17 @@ def initial_play_state(
 
 
 def _apply_action(
-    s: GameState, act: Optional[ActionIntent], damage_events: Optional[list[DamageEvent]] = None
+    s: GameState,
+    act: Optional[ActionIntent],
+    damage_events: Optional[list[DamageEvent]] = None,
+    heal_events: Optional[list[HealEvent]] = None,
 ) -> None:
     if act is None:
         return
     if isinstance(act, ActionBasicAttack):
         _resolve_basic_attack(s, act, damage_events)
     else:
-        _resolve_special(s, act, damage_events)
+        _resolve_special(s, act, damage_events, heal_events)
 
 
 def _clone_apply_move(state: GameState, move: Optional[MoveIntent]) -> GameState:
@@ -1065,6 +1095,7 @@ def step(state: GameState, turn: TurnAction) -> StepResult:
         raise IllegalActionError("match not in play phase")
 
     damage_events: list[DamageEvent] = []
+    heal_events: list[HealEvent] = []
 
     if state.pending_resurrect is not None:
         s = state.clone()
@@ -1086,10 +1117,17 @@ def step(state: GameState, turn: TurnAction) -> StepResult:
         u.row, u.col = dr, dc
         s.board[dr, dc] = lin_idx(team, slot)
         s.pending_resurrect = None
+        _sync_vp_from_units(s)
         _check_win(s)
         if not s.done:
             _advance_turn(s)
-        return StepResult(state=s, done=s.done, winner=s.winner, damage_events=tuple(damage_events))
+        return StepResult(
+            state=s,
+            done=s.done,
+            winner=s.winner,
+            damage_events=tuple(damage_events),
+            heal_events=tuple(heal_events),
+        )
 
     s = state.clone()
     pl = s.current_player
@@ -1106,13 +1144,20 @@ def step(state: GameState, turn: TurnAction) -> StepResult:
             if dest not in _legal_destinations_for_unit(s, pl, turn.move.actor_slot):
                 raise IllegalActionError("dest")
             _apply_move_only(s, pl, turn.move.actor_slot, dest)
-        _apply_action(s, turn.action, damage_events)
+        _apply_action(s, turn.action, damage_events, heal_events)
     except IllegalActionError:
         raise
+    _sync_vp_from_units(s)
     _check_win(s)
     if not s.done and s.pending_resurrect is None:
         _advance_turn(s)
-    return StepResult(state=s, done=s.done, winner=s.winner, damage_events=tuple(damage_events))
+    return StepResult(
+        state=s,
+        done=s.done,
+        winner=s.winner,
+        damage_events=tuple(damage_events),
+        heal_events=tuple(heal_events),
+    )
 
 
 def to_structured_observation(state: GameState) -> StructuredObservation:

@@ -16,14 +16,18 @@ def format_play_log_line(player: int, a: TurnAction) -> str:
 
 
 def format_step_outcome(sr: StepResult) -> str:
-    """Summarize damage from ``sr.damage_events`` after ``step`` (post-state)."""
-    if not sr.damage_events:
-        return ""
+    """Summarize damage / heal from ``StepResult`` after ``step`` (post-state)."""
     parts: list[str] = []
     for ev in sr.damage_events:
         u = slot_unit(sr.state, ev.target_team, ev.target_slot)
         label = CLASS_IDS[u.class_id][:3] if u is not None else "?"
         parts.append(f"{label} −{ev.amount} ({player_label(ev.target_team)}) @ ({ev.row},{ev.col})")
+    for ev in sr.heal_events:
+        u = slot_unit(sr.state, ev.target_team, ev.target_slot)
+        label = CLASS_IDS[u.class_id][:3] if u is not None else "?"
+        parts.append(f"{label} +{ev.amount} ({player_label(ev.target_team)}) @ ({ev.row},{ev.col})")
+    if not parts:
+        return ""
     return " → " + "; ".join(parts)
 
 

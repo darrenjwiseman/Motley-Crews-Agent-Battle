@@ -244,9 +244,21 @@ class DamageEvent:
     target_slot: int
 
 
+@dataclass(frozen=True, slots=True)
+class HealEvent:
+    """One heal application at a board cell (for UI / logging)."""
+
+    row: int
+    col: int
+    amount: int
+    target_team: int
+    target_slot: int
+
+
 @dataclass
 class StepResult:
     state: GameState
     done: bool
     winner: Optional[int] = None
     damage_events: Tuple[DamageEvent, ...] = ()
+    heal_events: Tuple[HealEvent, ...] = ()
