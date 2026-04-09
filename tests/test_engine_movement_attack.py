@@ -5,14 +5,14 @@ from __future__ import annotations
 import numpy as np
 
 from motley_crews_env.constants import TERRAIN_BLOCKED, TERRAIN_OPEN
-from motley_crews_env.engine import legal_actions, scenario_from_placements, step
-from motley_crews_env.state import initial_state, unit_at
+from motley_crews_env.engine import initial_play_state, legal_actions, scenario_from_placements, step
+from motley_crews_env.state import unit_at
 from motley_crews_env.types import ClassId, TeamId, TurnAction
 from motley_crews_env.types import ActionBasicAttack
 
 
 def test_opening_board_has_five_figures_per_side() -> None:
-    s = initial_state()
+    s = initial_play_state()
     from motley_crews_env.constants import FIGURES_PER_SIDE, TEAM_PLAYER_A, TEAM_PLAYER_B
 
     assert sum(1 for sl in range(FIGURES_PER_SIDE) if unit_at(s, TEAM_PLAYER_A, sl)) == 5

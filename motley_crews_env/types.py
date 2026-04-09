@@ -17,6 +17,7 @@ from numpy.typing import NDArray
 __all__ = [
     "ClassId",
     "Phase",
+    "MatchPhase",
     "SpecialId",
     "TeamId",
     "TerrainCode",
@@ -26,6 +27,7 @@ __all__ = [
     "ActionIntent",
     "TurnAction",
     "StructuredObservation",
+    "SetupPlacement",
 ]
 
 
@@ -55,6 +57,14 @@ class Phase(IntEnum):
     ACTION = 1
 
 
+class MatchPhase(IntEnum):
+    """Pre-play: coin flip + alternating placement from staging; then PLAY."""
+
+    PENDING_SETUP = 0  # awaiting begin_setup(...)
+    SETUP = 1
+    PLAY = 2
+
+
 class SpecialId(IntEnum):
     """Stable indices match constants.SPECIAL_IDS order."""
 
@@ -69,6 +79,14 @@ class SpecialId(IntEnum):
 
 
 Coord = Tuple[int, int]
+
+
+@dataclass(frozen=True, slots=True)
+class SetupPlacement:
+    """Place one figure from staging into an empty square in that side’s two home rows."""
+
+    actor_slot: int
+    destination: Coord
 
 
 @dataclass(frozen=True, slots=True)

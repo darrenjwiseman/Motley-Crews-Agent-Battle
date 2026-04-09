@@ -1,7 +1,8 @@
 """
 Mutable game state for the Motley Crews engine.
 
-Default start zones: Player A occupies row 7 cols 0–4; Player B row 0 cols 0–4.
+Match flow: figures begin in staging; after the coin flip and first/second setup choice,
+players alternate placing into their two home rows (see ``constants.DEPLOY_ROWS_*``).
 Class order per slot i matches ``constants.CLASS_IDS[i]``.
 """
 
@@ -20,12 +21,13 @@ from motley_crews_env.constants import (
     FIGURES_PER_SIDE,
     PLAYER_A_HOME_ROW,
     PLAYER_B_HOME_ROW,
+    STAGING_COORD,
     STARTING_HP_BY_CLASS,
     TEAM_PLAYER_A,
     TEAM_PLAYER_B,
     TERRAIN_OPEN,
 )
-from motley_crews_env.types import ClassId
+from motley_crews_env.types import ClassId, MatchPhase
 
 
 class IllegalActionError(ValueError):
@@ -69,6 +71,10 @@ class GameState:
     winner: Optional[int] = None
     # Per-turn: any friendly figure has used a move (blocks Knight Charge)
     any_friendly_moved_this_turn: bool = False
+    match_phase: int = int(MatchPhase.PLAY)
+    setup_current_player: int = TEAM_PLAYER_A
+    first_player: int = TEAM_PLAYER_A
+    coin_flip_winner: Optional[int] = None
     def clone(self) -> GameState:
         u = [None if x is None else _copy_unit(x) for x in self.units]
         return GameState(
@@ -82,6 +88,10 @@ class GameState:
             done=self.done,
             winner=self.winner,
             any_friendly_moved_this_turn=self.any_friendly_moved_this_turn,
+            match_phase=self.match_phase,
+            setup_current_player=self.setup_current_player,
+            first_player=self.first_player,
+            coin_flip_winner=self.coin_flip_winner,
         )
 
 
@@ -117,6 +127,8 @@ def unit_at(state: GameState, team: int, slot: int) -> Optional[UnitState]:
     u = slot_unit(state, team, slot)
     if u is None or not u.alive:
         return None
+    if u.row < 0:
+        return None
     return u
 
 
@@ -129,7 +141,13 @@ def initial_state(
     points_to_win: int = DEFAULT_POINTS_TO_WIN,
     terrain: Optional[NDArray[np.int8]] = None,
 ) -> GameState:
-    """Standard opening: full open board, figures in default start zones."""
+    """
+    Match start: empty board, all figures in staging (off-board).
+
+    Call ``begin_setup`` after the coin flip so the winner can choose first vs second
+    setup (which pairs with first vs second turn). Then alternate ``setup_step`` until
+    play begins.
+    """
     h, w = BOARD_SIZE, BOARD_SIZE
     if terrain is None:
         terrain = np.full((h, w), TERRAIN_OPEN, dtype=np.int8)
@@ -138,34 +156,27 @@ def initial_state(
 
     for slot in range(FIGURES_PER_SIDE):
         cid = slot  # ClassId matches slot index 0..4
-        col = DEFAULT_START_COLS[slot]
         hp = STARTING_HP_BY_CLASS[cid]
 
-        # Player A — bottom row
-        r_a, c_a = PLAYER_A_HOME_ROW, col
         ua = UnitState(
             class_id=cid,
             hp=hp,
             max_hp=hp,
-            row=r_a,
-            col=c_a,
+            row=STAGING_COORD,
+            col=STAGING_COORD,
             controller=TEAM_PLAYER_A,
         )
         units[_idx(TEAM_PLAYER_A, slot)] = ua
-        board[r_a, c_a] = _idx(TEAM_PLAYER_A, slot)
 
-        # Player B — top row
-        r_b, c_b = PLAYER_B_HOME_ROW, col
         ub = UnitState(
             class_id=cid,
             hp=hp,
             max_hp=hp,
-            row=r_b,
-            col=c_b,
+            row=STAGING_COORD,
+            col=STAGING_COORD,
             controller=TEAM_PLAYER_B,
         )
         units[_idx(TEAM_PLAYER_B, slot)] = ub
-        board[r_b, c_b] = _idx(TEAM_PLAYER_B, slot)
 
     return GameState(
         terrain=terrain,
@@ -175,6 +186,10 @@ def initial_state(
         turn_index=0,
         current_player=TEAM_PLAYER_A,
         points_to_win=points_to_win,
+        match_phase=int(MatchPhase.PENDING_SETUP),
+        setup_current_player=TEAM_PLAYER_A,
+        first_player=TEAM_PLAYER_A,
+        coin_flip_winner=None,
     )
 
 

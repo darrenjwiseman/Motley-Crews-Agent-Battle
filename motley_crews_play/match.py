@@ -6,7 +6,14 @@ import random
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from motley_crews_env.engine import initial_state, legal_actions, step
+from motley_crews_env.engine import (
+    begin_setup,
+    complete_setup_random,
+    initial_state,
+    legal_actions,
+    step,
+)
+from motley_crews_env.types import MatchPhase
 from motley_crews_env.serialization import turn_action_to_tuple
 from motley_crews_env.state import GameState
 from motley_crews_env.types import TurnAction
@@ -59,12 +66,21 @@ def run_match(
     initial: Optional[GameState] = None,
 ) -> MatchResult:
     """
-    Play until terminal or ``max_plies`` half-turns. Player A moves first (engine default).
+    Play until terminal or ``max_plies`` half-turns.
+
+    If the state is still in pre-play (coin flip / staging), a coin flip and random
+    first-vs-second setup choice are applied, then placement is completed at random.
 
     Policies are selected by ``state.current_player`` (0 -> policy_a, 1 -> policy_b).
     """
     rng = random.Random(seed)
     state = initial_state() if initial is None else initial
+    if state.match_phase == int(MatchPhase.PENDING_SETUP):
+        cw = rng.randint(0, 1)
+        wf = rng.choice([True, False])
+        state = begin_setup(state, coin_flip_winner=cw, winner_chooses_first_setup=wf)
+    if state.match_phase == int(MatchPhase.SETUP):
+        state = complete_setup_random(state, rng)
     policies: tuple[Policy, Policy] = (policy_a, policy_b)
     n = 0
     while not state.done and n < max_plies:

@@ -13,7 +13,8 @@ _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from motley_crews_env.engine import initial_state, legal_actions, step
+from motley_crews_env.engine import begin_setup, complete_setup_random, initial_state, legal_actions, step
+from motley_crews_env.types import MatchPhase
 
 
 def main() -> None:
@@ -23,6 +24,13 @@ def main() -> None:
     args = p.parse_args()
     rng = random.Random(args.seed)
     state = initial_state()
+    if state.match_phase == int(MatchPhase.PENDING_SETUP):
+        state = begin_setup(
+            state,
+            coin_flip_winner=rng.randint(0, 1),
+            winner_chooses_first_setup=rng.choice([True, False]),
+        )
+    state = complete_setup_random(state, rng)
     n = 0
     while not state.done and n < args.max_turns:
         acts = legal_actions(state)

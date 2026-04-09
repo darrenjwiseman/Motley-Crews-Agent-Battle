@@ -6,14 +6,21 @@ Implements core rules from ``rules/rules_spec.yaml`` (see module docstrings in `
 
 from __future__ import annotations
 
+import random
 from typing import Optional
 
 import numpy as np
 
 from motley_crews_env.constants import (
     BOARD_SIZE,
+    DEFAULT_POINTS_TO_WIN,
+    DEFAULT_START_COLS,
+    DEPLOY_ROWS_PLAYER_A,
+    DEPLOY_ROWS_PLAYER_B,
     FIGURES_PER_SIDE,
     MAX_CURSE_X,
+    PLAYER_A_HOME_ROW,
+    PLAYER_B_HOME_ROW,
     TEAM_PLAYER_A,
     TEAM_PLAYER_B,
     TERRAIN_BLOCKED,
@@ -41,8 +48,10 @@ from motley_crews_env.types import (
     ActionIntent,
     ActionSpecial,
     ClassId,
+    MatchPhase,
     MoveIntent,
     Phase,
+    SetupPlacement,
     SpecialId,
     StructuredObservation,
     TeamId,
@@ -782,17 +791,120 @@ def _resolve_special(s: GameState, sp: ActionSpecial) -> None:
 
 
 def _find_empty_in_start_zone(s: GameState, team: int) -> Optional[tuple[int, int]]:
-    from motley_crews_env.constants import DEFAULT_START_COLS, PLAYER_A_HOME_ROW, PLAYER_B_HOME_ROW
-
-    row = PLAYER_A_HOME_ROW if team == TEAM_PLAYER_A else PLAYER_B_HOME_ROW
-    for col in DEFAULT_START_COLS:
-        if s.board[row, col] < 0:
-            return (row, col)
+    rows = DEPLOY_ROWS_PLAYER_A if team == TEAM_PLAYER_A else DEPLOY_ROWS_PLAYER_B
+    for r in rows:
+        for c in range(BOARD_SIZE):
+            if s.board[r, c] < 0 and not _blocks_movement(int(s.terrain[r, c])):
+                return (r, c)
     for r in range(BOARD_SIZE):
         for c in range(BOARD_SIZE):
-            if s.board[r, c] < 0:
+            if s.board[r, c] < 0 and not _blocks_movement(int(s.terrain[r, c])):
                 return (r, c)
     return None
+
+
+def begin_setup(
+    state: GameState,
+    *,
+    coin_flip_winner: int,
+    winner_chooses_first_setup: bool,
+) -> GameState:
+    """
+    After a coin flip, ``coin_flip_winner`` chooses either first setup and first turn,
+    or second setup and second turn (paired).
+    """
+    s = state.clone()
+    if s.match_phase != int(MatchPhase.PENDING_SETUP):
+        raise IllegalActionError("setup not pending")
+    if coin_flip_winner not in (TEAM_PLAYER_A, TEAM_PLAYER_B):
+        raise ValueError("coin_flip_winner must be a team id")
+    first = coin_flip_winner if winner_chooses_first_setup else opponent(coin_flip_winner)
+    s.coin_flip_winner = coin_flip_winner
+    s.first_player = first
+    s.setup_current_player = first
+    s.match_phase = int(MatchPhase.SETUP)
+    return s
+
+
+def legal_setup_actions(state: GameState) -> list[SetupPlacement]:
+    """Legal single-piece placements for ``state.setup_current_player`` during setup."""
+    if state.match_phase != int(MatchPhase.SETUP):
+        return []
+    pl = state.setup_current_player
+    rows = DEPLOY_ROWS_PLAYER_A if pl == TEAM_PLAYER_A else DEPLOY_ROWS_PLAYER_B
+    out: list[SetupPlacement] = []
+    for sl in range(FIGURES_PER_SIDE):
+        su = slot_unit(state, pl, sl)
+        if su is None or not su.alive or su.row >= 0:
+            continue
+        for r in rows:
+            for c in range(BOARD_SIZE):
+                if state.board[r, c] >= 0:
+                    continue
+                if _blocks_movement(int(state.terrain[r, c])):
+                    continue
+                out.append(SetupPlacement(actor_slot=sl, destination=(r, c)))
+    return out
+
+
+def setup_step(state: GameState, placement: SetupPlacement) -> StepResult:
+    """Place one staged figure; alternates players until both sides have five on the board."""
+    s = state.clone()
+    if s.match_phase != int(MatchPhase.SETUP):
+        raise IllegalActionError("not in setup")
+    legal = legal_setup_actions(s)
+    if placement not in legal:
+        raise IllegalActionError("illegal setup placement")
+    pl = s.setup_current_player
+    u = slot_unit(s, pl, placement.actor_slot)
+    if u is None or not u.alive or u.row >= 0:
+        raise IllegalActionError("bad slot")
+    dr, dc = placement.destination
+    if s.board[dr, dc] >= 0:
+        raise IllegalActionError("occupied")
+    u.row, u.col = dr, dc
+    s.board[dr, dc] = lin_idx(pl, placement.actor_slot)
+
+    na = sum(1 for sl in range(FIGURES_PER_SIDE) if unit_at(s, TEAM_PLAYER_A, sl))
+    nb = sum(1 for sl in range(FIGURES_PER_SIDE) if unit_at(s, TEAM_PLAYER_B, sl))
+    if na == FIGURES_PER_SIDE and nb == FIGURES_PER_SIDE:
+        s.match_phase = int(MatchPhase.PLAY)
+        s.current_player = s.first_player
+        s.turn_index = 0
+    else:
+        s.setup_current_player = opponent(pl)
+
+    return StepResult(state=s, done=False, winner=None)
+
+
+def complete_setup_random(state: GameState, rng: random.Random) -> GameState:
+    """Finish alternating placement using uniform random legal choices (for headless runs)."""
+    s = state
+    while s.match_phase == int(MatchPhase.SETUP):
+        opts = legal_setup_actions(s)
+        if not opts:
+            raise RuntimeError("no legal setup actions")
+        s = setup_step(s, rng.choice(opts)).state
+    return s
+
+
+def initial_play_state(
+    *,
+    points_to_win: int = DEFAULT_POINTS_TO_WIN,
+    terrain: Optional[np.ndarray] = None,
+    current_player: int = TEAM_PLAYER_A,
+) -> GameState:
+    """Deterministic fully placed board (classic one row per side, cols 0–4) for tests / baselines."""
+    placements: list[tuple[int, int, int, int, int]] = []
+    for slot in range(FIGURES_PER_SIDE):
+        placements.append((TEAM_PLAYER_A, slot, PLAYER_A_HOME_ROW, DEFAULT_START_COLS[slot], slot))
+        placements.append((TEAM_PLAYER_B, slot, PLAYER_B_HOME_ROW, DEFAULT_START_COLS[slot], slot))
+    return scenario_from_placements(
+        terrain=terrain,
+        placements=placements,
+        current_player=current_player,
+        points_to_win=points_to_win,
+    )
 
 
 def _apply_action(s: GameState, act: Optional[ActionIntent]) -> None:
@@ -824,6 +936,8 @@ def _clone_apply_move(state: GameState, move: Optional[MoveIntent]) -> GameState
 def legal_actions(state: GameState) -> list[TurnAction]:
     """All legal full turns for ``state.current_player``."""
     if state.done:
+        return []
+    if state.match_phase != int(MatchPhase.PLAY):
         return []
     out: list[TurnAction] = []
     pl = state.current_player
@@ -866,6 +980,8 @@ def step(state: GameState, turn: TurnAction) -> StepResult:
     """Apply a full turn (move then action). Raises ``IllegalActionError`` if illegal."""
     if state.done:
         raise IllegalActionError("game over")
+    if state.match_phase != int(MatchPhase.PLAY):
+        raise IllegalActionError("match not in play phase")
     s = state.clone()
     pl = s.current_player
     try:
@@ -975,6 +1091,10 @@ def scenario_from_placements(
         turn_index=0,
         current_player=current_player,
         points_to_win=points_to_win,
+        match_phase=int(MatchPhase.PLAY),
+        setup_current_player=current_player,
+        first_player=current_player,
+        coin_flip_winner=None,
     )
 
 
@@ -984,6 +1104,11 @@ __all__ = [
     "to_structured_observation",
     "scenario_from_placements",
     "initial_state",
+    "initial_play_state",
+    "begin_setup",
+    "legal_setup_actions",
+    "setup_step",
+    "complete_setup_random",
     "IllegalActionError",
     "StepResult",
 ]

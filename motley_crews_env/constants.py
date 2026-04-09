@@ -43,10 +43,18 @@ DEFAULT_POINTS_TO_WIN: int = 4
 # Starting max HP per class_id index (knight, barbarian, white_mage, black_mage, arbalist)
 STARTING_HP_BY_CLASS: tuple[int, ...] = (7, 6, 4, 4, 5)
 
-# Default start rows: A bottom edge, B top edge (diagram p.5); cols 0..4 for five figures
+# Board edges: A bottom, B top (row 0 = north in matrix coords)
 PLAYER_A_HOME_ROW: int = 7
 PLAYER_B_HOME_ROW: int = 0
 DEFAULT_START_COLS: tuple[int, ...] = (0, 1, 2, 3, 4)
+
+# Staging (pre-placement): unit not on board yet
+STAGING_COORD: int = -1
+
+# Deployment during setup: each side uses the two rows nearest that edge; rows 2–5 are off-limits
+# (center rows 3–4 are the narrow “no man’s land” band; 2 and 5 are still not home rows)
+DEPLOY_ROWS_PLAYER_A: tuple[int, ...] = (6, 7)
+DEPLOY_ROWS_PLAYER_B: tuple[int, ...] = (0, 1)
 
 # Black Mage Curse: X is chosen by player; engine validates. Upper bound for mask sizing / agents.
 MAX_CURSE_X: int = 16
