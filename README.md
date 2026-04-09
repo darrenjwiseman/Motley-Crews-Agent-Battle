@@ -50,3 +50,22 @@ Motley Crews AI Coaching Project Plan
     Training & Evaluation Layer
         Self‑play and coach‑conditioned play pipelines.
         Logging, match storage, and analytics (Elo, win‑rate vs baselines, style diversity, stability).
+
+5. Current phase / roadmap
+
+    Implementation has **diverged in order** from the full architecture in section 4 above:
+
+    1. **Human-playable client** — A Pygame UI (`python -m motley_crews_play --ui`) exposes legal moves and actions so people can play through the real rules. Assets (e.g. sprites) live under `motley_crews_play/`. This validates that the game is understandable and fun to operate before investing in learning stacks.
+
+    2. **Engine correctness and debugging** — Harden `motley_crews_env` against `rules/rules_spec.yaml`, maintain automated tests under `tests/`, and fix edge cases found in play or CI.
+
+    3. **Later** — Return to the **agent, coaching, and training** layers in section 4 once the simulator and human client are trusted.
+
+6. Near-term next steps
+
+    Suggested focus while in phases 1–2 above:
+
+    - **Play testing** — Full matches (human vs CPU/heuristic), all classes and specials, terrain and win/loss paths, setup flow; note bugs and spec mismatches.
+    - **UX/UI testing** — Clarity of legal moves and selection, error feedback, responsiveness, keyboard/mouse flow, layout at target resolutions.
+    - **Regression** — Run `pytest` after substantive engine or UI changes; add or extend tests for bugs discovered in play.
+    - **Backlog** — Track known issues in `HANDOFF.md` during active work (or a short dedicated doc if the list grows).

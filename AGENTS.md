@@ -5,7 +5,7 @@ Persistent context for this repo lives in:
 - **[`.cursor/rules/`](.cursor/rules/)** — Cursor rules (repo map, `motley_crews_env` vs `motley_crews_play` conventions).
 - **[`HANDOFF.md`](HANDOFF.md)** — short-lived session notes; read this first when continuing multi-session work.
 
-High-level product and architecture narrative is in [`README.md`](README.md) (project plan).
+High-level narrative, **current phase**, and **near-term next steps** are in [`README.md`](README.md) (long-term plan plus sections 5–6), not only the original architecture outline.
 
 ## Git workflow (continuity)
 

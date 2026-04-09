@@ -5,6 +5,8 @@ alwaysApply: true
 
 # Motley Crews Agent Battle — overview
 
+**Current priority:** human-playable Pygame client and rules-engine hardening before agent/coaching/training work. Roadmap and near-term checklist: [README.md](README.md) (sections 5–6).
+
 ## Layout
 
 | Path | Role |
