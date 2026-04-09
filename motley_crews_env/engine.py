@@ -1003,6 +1003,15 @@ def _clone_apply_move(state: GameState, move: Optional[MoveIntent]) -> GameState
     return s
 
 
+def preview_after_move(state: GameState, move: Optional[MoveIntent]) -> GameState:
+    """
+    UI-only: return a cloned state with ``move`` applied (no action, no turn advance).
+
+    Authoritative play still uses :func:`step` with a full :class:`~motley_crews_env.types.TurnAction`.
+    """
+    return _clone_apply_move(state, move)
+
+
 def legal_actions(state: GameState) -> list[TurnAction]:
     """All legal full turns for ``state.current_player``."""
     if state.done:

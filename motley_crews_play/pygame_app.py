@@ -9,12 +9,33 @@ from __future__ import annotations
 import random
 import sys
 from enum import IntEnum
+from io import BytesIO
 from pathlib import Path
 from typing import Any, Optional
 
 _ROOT = Path(__file__).resolve().parents[1]
+_PLAY_PKG = Path(__file__).resolve().parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
+
+
+def _candidate_sprite_png_paths(filename: str) -> list[Path]:
+    """Resolve sprite PNGs when cwd, installs, or copies differ (assets live under motley_crews_play/)."""
+    out: list[Path] = []
+    seen: set[str] = set()
+
+    def add(p: Path) -> None:
+        k = str(p.resolve())
+        if k not in seen:
+            seen.add(k)
+            out.append(p)
+
+    add(_PLAY_PKG / "assets" / "sprites" / filename)
+    add(_ROOT / "motley_crews_play" / "assets" / "sprites" / filename)
+    cwd = Path.cwd()
+    add(cwd / "motley_crews_play" / "assets" / "sprites" / filename)
+    add(cwd / "assets" / "sprites" / filename)
+    return out
 
 import pygame
 
@@ -37,6 +58,7 @@ from motley_crews_env.engine import (
     initial_state,
     legal_actions,
     legal_setup_actions,
+    preview_after_move,
     setup_step,
     step,
     to_structured_observation,
@@ -85,7 +107,10 @@ class PlayMode(IntEnum):
 WINDOW_W = 1200
 WINDOW_H = 860
 BOARD_OX = 32
+# Reference cell size for proportional scaling (iso, token radii). Setup screens still use this.
 CELL_TOP = 56
+# Play mode: cells may grow up to this cap when the window allows (width and height limits apply).
+CELL_TOP_MAX = 128
 TOP_MARGIN = 8
 PLAY_HUD_H = 26
 PANEL_B_H = 96
@@ -103,6 +128,15 @@ ISO_OY_PLAY = ISO_OY_SETUP + (BOARD_OY_PLAY - BOARD_OY_SETUP)
 
 LOG_TOP = 62
 LOG_LINE_H = 18
+
+# Minimum width (px) for the right column: event log, hints, pass buttons.
+SIDEBAR_W_MIN = 400
+PLAY_BOTTOM_MARGIN = 12
+
+# Class PNGs: no tint. Integer upscale from native size, then scale to fill token diameter D so
+# pieces are not tiny icons inside large rings. Downscale when native max side exceeds D.
+# Recommended source: 32x32 or 48x48. Nearest-neighbor scaling; False uses smoothscale.
+SPRITE_SCALE_NEAREST = True
 
 # Per-class combat stats and special names (roster display)
 CLASS_SPECIALS_DISPLAY: tuple[str, ...] = (
@@ -231,6 +265,37 @@ def _pass_turn_in_legal(legal: list[TurnAction]) -> bool:
 
 def _pass_action_after_move_available(candidates: list[TurnAction]) -> bool:
     return any(ta.action is None for ta in candidates)
+
+
+def _ambiguous_all_no_move(candidates: list[TurnAction]) -> bool:
+    return bool(candidates) and all(ta.move is None for ta in candidates)
+
+
+def _format_turn_action_short(ta: TurnAction) -> str:
+    """One-line disambiguator when full format_turn_action is too verbose."""
+    if ta.resurrect_place is not None:
+        rr, rc = ta.resurrect_place
+        return f"Place revive ({rr},{rc})"
+    if ta.action is None:
+        return "Pass (no action)"
+    if isinstance(ta.action, ActionBasicAttack):
+        ba = ta.action
+        abbr = CLASS_IDS[ba.actor_slot][:3] if 0 <= ba.actor_slot < len(CLASS_IDS) else "?"
+        tr, tc = ba.target_square
+        return f"{abbr} atk ({tr},{tc})"
+    sp = ta.action
+    assert isinstance(sp, ActionSpecial)
+    abbr = CLASS_IDS[sp.actor_slot][:3] if 0 <= sp.actor_slot < len(CLASS_IDS) else "?"
+    name = SPECIAL_IDS[int(sp.special_id)].replace("_", " ")
+    extra = ""
+    if sp.target_square is not None:
+        tr, tc = sp.target_square
+        extra = f" @ ({tr},{tc})"
+    if sp.curse_x is not None:
+        extra += f" x={sp.curse_x}"
+    if sp.animate_dead_crew_slot is not None:
+        extra += f" anim {sp.animate_dead_crew_slot}"
+    return f"{abbr} {name}{extra}"
 
 
 def _move_destinations_for_slot(legal: list[TurnAction], slot: int) -> set[tuple[int, int]]:
@@ -530,7 +595,7 @@ class MotleyCrewsUI:
         self.selected_idx: int = 0
         self.action_scroll = 0
         self.cpu_timer = 0
-        self.cpu_delay_ms = 180
+        self.cpu_delay_ms = 2000
 
         # Interactive setup (human modes): coin → choice → drag-drop placement
         self._coin_flip_winner: Optional[int] = None
@@ -551,8 +616,11 @@ class MotleyCrewsUI:
         self._play_move_drag_slot: Optional[int] = None
         self._play_drag_xy: Optional[tuple[int, int]] = None
         self._play_ambiguous: list[TurnAction] = []
+        self._play_ambiguous_no_move: bool = False
         self._play_show_fallback_list: bool = False
         self._pending_move: Optional[MoveIntent] = None
+        self._play_board_preview: Optional[GameState] = None
+        self._play_menu_anchor_slot: Optional[int] = None
         self._turn_candidates: list[TurnAction] = []
         self.play_log: list[str] = []
         self.log_scroll: int = 0
@@ -560,35 +628,155 @@ class MotleyCrewsUI:
         # (row, col, total_damage, remaining_ms) for floating hit numbers
         self._damage_fx: list[tuple[int, int, int, float]] = []
         self._menu_hover_key: Optional[str] = None
+        self._menu_sticky_key: Optional[str] = "cpu"
         self.btn_return_menu: pygame.Rect = pygame.Rect(0, 0, 1, 1)
+        self._sprite_base: list[Optional[pygame.Surface]] = [None] * len(CLASS_IDS)
+        self._sprite_native: list[Optional[tuple[int, int]]] = [None] * len(CLASS_IDS)
+        self._sprite_scaled: dict[tuple[int, int], pygame.Surface] = {}
+        self._load_class_sprites()
         self._recompute_layout()
 
     def _recompute_layout(self) -> None:
         w, h = self.win_w, self.win_h
-        self.sidebar_x = max(520, int(w * 0.56))
-        self.sidebar_w = w - self.sidebar_x
         self.board_ox = 12
-        avail = self.sidebar_x - self.board_ox - 8
-        self.cell_top = max(40, min(CELL_TOP, avail // BOARD_SIZE))
-        self.board_grid_px = self.cell_top * BOARD_SIZE
         self.board_oy_play = TOP_MARGIN + PLAY_HUD_H + PANEL_B_H
+        # Place the divider so the board column is as wide as possible while keeping a usable sidebar.
+        min_board_right = self.board_ox + BOARD_SIZE * 40 + 8
+        sidebar_x_candidate = w - SIDEBAR_W_MIN
+        if sidebar_x_candidate >= min_board_right:
+            self.sidebar_x = sidebar_x_candidate
+        elif w >= min_board_right + 280:
+            self.sidebar_x = min_board_right
+        else:
+            self.sidebar_x = max(520, int(w * 0.56))
+        self.sidebar_w = w - self.sidebar_x
+        board_pad = 8
+        avail_w = self.sidebar_x - self.board_ox - board_pad
+        cell_w_max = max(1, avail_w // BOARD_SIZE)
+        h_lim = (h - self.board_oy_play - PANEL_A_H - PLAY_BOTTOM_MARGIN) // BOARD_SIZE
+        self.cell_top = max(40, min(CELL_TOP_MAX, cell_w_max, max(1, h_lim)))
+        self.board_grid_px = self.cell_top * BOARD_SIZE
         self.log_bottom = h - 12
         self.legal_list_top = min(int(h * 0.48), max(120, h - 280))
         scale = self.cell_top / float(CELL_TOP)
         self.tw_iso = max(36, int(TW_ISO * scale))
         self.th_iso = max(20, int(TH_ISO * scale))
-        # Center isometric grid in the board panel
         iso_approx_w = (BOARD_SIZE - 1) * (self.tw_iso // 2) + self.tw_iso
         self.iso_ox = max(24, (self.sidebar_x - iso_approx_w) // 2)
         self.iso_oy_play = ISO_OY_SETUP + (self.board_oy_play - BOARD_OY_SETUP)
         self._token_r_top = max(12, int(18 * scale))
         self._token_r_iso = max(10, int(14 * scale))
+        self._sprite_scaled.clear()
         self.btn_pass_turn = pygame.Rect(self.sidebar_x + 8, TOP_MARGIN + 2, 150, 26)
         self.btn_pass_action_after_move = pygame.Rect(self.sidebar_x + 8, TOP_MARGIN + 30, 190, 26)
         self.log_scroll = min(self.log_scroll, self._max_log_scroll())
         self.btn_return_menu = pygame.Rect(w // 2 - 120, int(h * 0.70), 240, 48)
         self._layout_menu_buttons()
         self._layout_setup_buttons()
+
+    def _load_class_sprites(self) -> None:
+        loaded = 0
+        for i, name in enumerate(CLASS_IDS):
+            filename = f"{name}.png"
+            surf: Optional[pygame.Surface] = None
+            for p in _candidate_sprite_png_paths(filename):
+                if not p.is_file():
+                    continue
+                try:
+                    surf = pygame.image.load(str(p)).convert_alpha()
+                    break
+                except pygame.error:
+                    surf = None
+            if surf is None:
+                try:
+                    from importlib.resources import files
+
+                    raw = files("motley_crews_play").joinpath("assets", "sprites", filename).read_bytes()
+                    surf = pygame.image.load(BytesIO(raw)).convert_alpha()
+                except (OSError, ModuleNotFoundError, FileNotFoundError, pygame.error):
+                    surf = None
+            if surf is not None:
+                self._sprite_base[i] = surf
+                self._sprite_native[i] = surf.get_size()
+                loaded += 1
+            else:
+                self._sprite_base[i] = None
+                self._sprite_native[i] = None
+        if loaded == 0:
+            print(
+                "motley_crews_play: no class sprites found under assets/sprites/ "
+                "(install PNGs next to pygame_app or run from repo root). Using token circles.",
+                file=sys.stderr,
+            )
+
+    @staticmethod
+    def _scale_surface_to_max_side(surf: pygame.Surface, d_px: int) -> pygame.Surface:
+        """Scale up (or down) so the longest side equals d_px (aspect preserved)."""
+        sw, sh = surf.get_size()
+        sm = max(sw, sh)
+        if sm <= 0 or sm == d_px:
+            return surf
+        t = d_px / float(sm)
+        dw = max(1, int(round(sw * t)))
+        dh = max(1, int(round(sh * t)))
+        if SPRITE_SCALE_NEAREST:
+            return pygame.transform.scale(surf, (dw, dh))
+        return pygame.transform.smoothscale(surf, (dw, dh))
+
+    def _scaled_class_sprite(self, class_id: int, pixel_diameter: int) -> Optional[pygame.Surface]:
+        if class_id < 0 or class_id >= len(self._sprite_base):
+            return None
+        base = self._sprite_base[class_id]
+        native = self._sprite_native[class_id]
+        if base is None or native is None:
+            return None
+        d_px = max(4, pixel_diameter)
+        key = (class_id, d_px)
+        if key in self._sprite_scaled:
+            return self._sprite_scaled[key]
+        nw, nh = native
+        if nw <= 0 or nh <= 0:
+            return None
+        m = max(nw, nh)
+        if m <= d_px:
+            k = max(1, d_px // m)
+            sw, sh = nw * k, nh * k
+            img = pygame.transform.scale(base, (sw, sh))
+            # Integer step can still be smaller than d_px (e.g. 64px art in 82px ring); fill the token box.
+            if max(img.get_size()) < d_px:
+                img = self._scale_surface_to_max_side(img, d_px)
+        else:
+            rfit = min(d_px / float(nw), d_px / float(nh))
+            dw = max(1, int(round(nw * rfit)))
+            dh = max(1, int(round(nh * rfit)))
+            if SPRITE_SCALE_NEAREST:
+                img = pygame.transform.scale(base, (dw, dh))
+            else:
+                img = pygame.transform.smoothscale(base, (dw, dh))
+        self._sprite_scaled[key] = img
+        return img
+
+    def _blit_class_sprite(
+        self,
+        cx: int,
+        cy: int,
+        class_id: int,
+        team: int,
+        radius: int,
+        *,
+        view: ViewMode = ViewMode.TOP_DOWN,
+        draw_marker: bool = True,
+    ) -> bool:
+        spr = self._scaled_class_sprite(class_id, radius * 2)
+        if spr is None:
+            return False
+        self.screen.blit(spr, (cx - spr.get_width() // 2, cy - spr.get_height() // 2))
+        pygame.draw.circle(self.screen, (20, 20, 30), (cx, cy), radius, 2)
+        ring = (120, 160, 255) if team == TEAM_PLAYER_A else (255, 160, 120)
+        pygame.draw.circle(self.screen, ring, (cx, cy), radius + 3, 2)
+        if draw_marker:
+            _draw_team_marker(self.screen, cx, cy, team, view=view, radius=radius)
+        return True
 
     def _board_origin_top(self, *, play: bool = False) -> tuple[int, int]:
         if not play:
@@ -674,8 +862,61 @@ class MotleyCrewsUI:
         self._play_move_drag_slot = None
         self._play_drag_xy = None
         self._play_ambiguous = []
+        self._play_ambiguous_no_move = False
         self._pending_move = None
+        self._play_board_preview = None
+        self._play_menu_anchor_slot = None
         self._turn_candidates = []
+
+    def _state_for_board(self) -> GameState:
+        """Board rendering and cell hit-testing while a move is previewed before the action sub-step."""
+        assert self.game_state is not None
+        if self._play_board_preview is not None:
+            return self._play_board_preview
+        return self.game_state
+
+    def _screen_center_for_friendly_slot(self, slot: int) -> Optional[tuple[int, int]]:
+        gs = self._state_for_board()
+        pl = gs.current_player
+        u = unit_at(gs, pl, slot)
+        if u is None or not u.alive or u.row < 0:
+            return None
+        if self.view_mode == ViewMode.TOP_DOWN:
+            return self._cell_center_top(u.row, u.col, play=True)
+        cx, cy = self._cell_center_iso(u.row, u.col, play=True)
+        return cx, cy - 4
+
+    def _menu_top_left_near_slot(self, slot: int, menu_pixel_height: int) -> tuple[int, int]:
+        """Top-left for a vertical menu beside the piece, clamped to the window."""
+        w_menu = 240
+        c = self._screen_center_for_friendly_slot(slot)
+        if c is None:
+            cx = min(self.sidebar_x - 24, self.win_w // 2)
+            return (min(max(8, cx - w_menu // 2), self.win_w - w_menu - 8), 72)
+        cx, cy = c
+        x = cx + 20
+        y = cy - 16
+        x = min(max(8, x), self.win_w - w_menu - 8)
+        y = min(max(8, y), self.win_h - menu_pixel_height - 8)
+        return x, y
+
+    def _sync_play_menu_geometry(self) -> None:
+        """Keep popup menus aligned with the anchored piece (resize / preview move)."""
+        if not self._play_menu_items:
+            return
+        if self._play_menu_anchor_slot is None:
+            return
+        est_h = sum(r.height for r, _t, _e in self._play_menu_items) + len(self._play_menu_items) * 6
+        new_ax, new_ay = self._menu_top_left_near_slot(self._play_menu_anchor_slot, est_h)
+        old_ax, old_ay = self._play_popup_anchor
+        dx, dy = new_ax - old_ax, new_ay - old_ay
+        if dx == 0 and dy == 0:
+            return
+        self._play_menu_items = [
+            (pygame.Rect(r.x + dx, r.y + dy, r.width, r.height), tag, ex)
+            for r, tag, ex in self._play_menu_items
+        ]
+        self._play_popup_anchor = (new_ax, new_ay)
 
     def _commit_turn(self, ta: TurnAction) -> None:
         if not self.game_state:
@@ -737,7 +978,7 @@ class MotleyCrewsUI:
         if self._play_ui_mode == "action_after_move" and self.game_state is not None:
             if self._pending_move is not None:
                 return (
-                    _cells_with_actionable_figures(self.game_state, self._turn_candidates),
+                    _cells_with_actionable_figures(self._state_for_board(), self._turn_candidates),
                     HL_ACTION_FIGURE,
                 )
             return empty, HL_MOVE
@@ -770,14 +1011,21 @@ class MotleyCrewsUI:
             return empty, HL_MOVE
         return empty, HL_MOVE
 
-    def _open_piece_menu(self, mx: int, my: int, slot: int) -> None:
+    def _open_piece_menu(self, slot: int) -> None:
         legal = self.legal_list
-        x = min(max(8, mx - 80), 860)
-        y = min(max(72, my - 20), 480)
+        h, w, gap = 28, 220, 3
+        nrows = (
+            (1 if _move_destinations_for_slot(legal, slot) else 0)
+            + (1 if _basic_targets_for_slot(legal, slot) else 0)
+            + (1 if _special_ids_for_slot(legal, slot) else 0)
+            + 1
+        )
+        est_h = nrows * (h + gap) + 8
+        x, y = self._menu_top_left_near_slot(slot, est_h)
         self._play_popup_anchor = (x, y)
+        self._play_menu_anchor_slot = slot
         self._play_slot = slot
         self._play_ui_mode = "piece_menu"
-        h, w, gap = 28, 220, 3
         yy = y
         items: list[tuple[pygame.Rect, str, Any]] = []
         if _move_destinations_for_slot(legal, slot):
@@ -798,18 +1046,25 @@ class MotleyCrewsUI:
         self._play_slot = None
         self._play_sp_id = None
         self._play_menu_items = []
+        self._play_menu_anchor_slot = None
         self._play_curse_target = None
         self._play_ambiguous = []
 
-    def _open_action_piece_menu(self, mx: int, my: int, slot: int) -> None:
+    def _open_action_piece_menu(self, slot: int) -> None:
         """Action sub-step only: basic / special for this figure (after a move is already chosen)."""
         c = self._turn_candidates
-        x = min(max(8, mx - 80), 860)
-        y = min(max(72, my - 20), 480)
+        h, w, gap = 28, 220, 3
+        nrows = (
+            (1 if _basic_targets_for_slot_in_candidates(c, slot) else 0)
+            + (1 if _special_ids_for_slot_candidates(c, slot) else 0)
+            + 1
+        )
+        est_h = nrows * (h + gap) + 8
+        x, y = self._menu_top_left_near_slot(slot, est_h)
         self._play_popup_anchor = (x, y)
+        self._play_menu_anchor_slot = slot
         self._play_slot = slot
         self._play_ui_mode = "action_piece_menu"
-        h, w, gap = 28, 220, 3
         yy = y
         items: list[tuple[pygame.Rect, str, Any]] = []
         if _basic_targets_for_slot_in_candidates(c, slot):
@@ -824,13 +1079,11 @@ class MotleyCrewsUI:
     def _finish_move_destination_pick(self, cand: list[TurnAction]) -> None:
         if not cand:
             return
-        if len(cand) == 1:
-            self._commit_turn(cand[0])
-            return
         mv = cand[0].move
         assert mv is not None
         self._pending_move = mv
         self._turn_candidates = cand
+        self._play_board_preview = preview_after_move(self.game_state, mv)
         self._enter_action_phase_after_move()
 
     def _open_special_submenu(self) -> None:
@@ -848,10 +1101,10 @@ class MotleyCrewsUI:
             else _special_ids_for_slot(self.legal_list, slot)
         )
         for sid in spec_ids:
-            label = SPECIAL_IDS[sid]
             items.append((pygame.Rect(x, yy, w, h), f"special_pick:{sid}", None))
             yy += h + gap
         self._play_menu_items = items
+        self._play_menu_anchor_slot = slot
         self._play_ui_mode = "special_submenu"
 
     def _open_curse_x_menu(self, target: tuple[int, int]) -> None:
@@ -894,14 +1147,20 @@ class MotleyCrewsUI:
 
     def _open_ambiguous_menu(self, candidates: list[TurnAction]) -> None:
         self._play_ambiguous = candidates
-        x, y = self._play_popup_anchor
+        self._play_ambiguous_no_move = _ambiguous_all_no_move(candidates)
+        n = min(14, len(candidates)) + 1
+        est_h = n * 24 + (72 if self._play_ambiguous_no_move else 48)
+        if self._play_slot is not None:
+            x, y = self._menu_top_left_near_slot(self._play_slot, est_h)
+            self._play_popup_anchor = (x, y)
+            self._play_menu_anchor_slot = self._play_slot
+        else:
+            x, y = self._play_popup_anchor
+            self._play_menu_anchor_slot = None
         h, w, gap = 22, 480, 2
-        yy = y + 40
+        yy = y + (62 if self._play_ambiguous_no_move else 40)
         items: list[tuple[pygame.Rect, str, Any]] = []
-        for i, ta in enumerate(candidates[:14]):
-            line = format_turn_action(ta)
-            if len(line) > 52:
-                line = line[:49] + "…"
+        for i, _ta in enumerate(candidates[:14]):
             items.append((pygame.Rect(x, yy, w, h), f"pick_turn:{i}", None))
             yy += h + gap
         items.append((pygame.Rect(x, yy, w, 160), "cancel", None))
@@ -924,13 +1183,11 @@ class MotleyCrewsUI:
                 if tag == "back" and self._play_slot is not None:
                     if self._pending_move is not None:
                         if self._play_ui_mode == "special_submenu":
-                            ax, ay = self._play_popup_anchor
-                            self._open_action_piece_menu(ax, ay, self._play_slot)
+                            self._open_action_piece_menu(self._play_slot)
                         else:
                             self._enter_action_phase_after_move()
                     else:
-                        ax, ay = self._play_popup_anchor
-                        self._open_piece_menu(ax, ay, self._play_slot)
+                        self._open_piece_menu(self._play_slot)
                     return True
                 if tag == "cancel" and self._pending_move is not None and self._play_ui_mode == "action_piece_menu":
                     self._enter_action_phase_after_move()
@@ -1053,18 +1310,19 @@ class MotleyCrewsUI:
         if cell is None:
             return False
         r, c = cell
+        gs_board = self._state_for_board()
 
         if self._play_ui_mode in ("idle", "action_after_move"):
-            slot = _actor_slot_at_cell(gs, r, c)
+            slot = _actor_slot_at_cell(gs_board, r, c)
             if slot is None:
                 return False
             if self._pending_move is not None:
                 if not _slot_can_act_after_move(self._turn_candidates, slot):
                     return False
-                self._open_action_piece_menu(mx, my, slot)
+                self._open_action_piece_menu(slot)
                 return True
             if self._play_ui_mode == "idle":
-                self._open_piece_menu(mx, my, slot)
+                self._open_piece_menu(slot)
                 return True
             return False
 
@@ -1240,6 +1498,7 @@ class MotleyCrewsUI:
         if self.game_state.done:
             self.phase = "over"
             self.legal_list = []
+            self._reset_play_interaction()
         else:
             self._refresh_legal()
 
@@ -1360,14 +1619,19 @@ class MotleyCrewsUI:
         if self.phase == "menu":
             if self.btn_cpu_cpu.collidepoint(mx, my):
                 self.play_mode = PlayMode.CPU_CPU
+                self._menu_sticky_key = "cpu"
             elif self.btn_h_a.collidepoint(mx, my):
                 self.play_mode = PlayMode.HUMAN_CPU_A
+                self._menu_sticky_key = "ha"
             elif self.btn_h_b.collidepoint(mx, my):
                 self.play_mode = PlayMode.HUMAN_CPU_B
+                self._menu_sticky_key = "hb"
             elif self.btn_h_h.collidepoint(mx, my):
                 self.play_mode = PlayMode.HUMAN_HUMAN
+                self._menu_sticky_key = "hh"
             elif self.btn_view.collidepoint(mx, my):
                 self.view_mode = ViewMode.ISOMETRIC if self.view_mode == ViewMode.TOP_DOWN else ViewMode.TOP_DOWN
+                self._menu_sticky_key = "view"
             elif self.btn_start.collidepoint(mx, my):
                 self.reset_match()
             return
@@ -1530,6 +1794,11 @@ class MotleyCrewsUI:
         return tag
 
     def _draw_play_menus(self) -> None:
+        self._sync_play_menu_geometry()
+        if self._play_ui_mode == "ambiguous" and self._play_ambiguous_no_move and self._play_menu_items:
+            ax, ay = self._play_popup_anchor
+            warn = self.font.render("Act without moving?", True, (255, 215, 130))
+            self.screen.blit(warn, (ax + 4, ay + 6))
         for rect, tag, _e in self._play_menu_items:
             pygame.draw.rect(self.screen, (55, 58, 72), rect, border_radius=4)
             pygame.draw.rect(self.screen, (120, 125, 145), rect, 1, border_radius=4)
@@ -1537,7 +1806,11 @@ class MotleyCrewsUI:
             if tag.startswith("pick_turn:"):
                 idx = int(tag.split(":")[1])
                 if 0 <= idx < len(self._play_ambiguous):
-                    cap = format_turn_action(self._play_ambiguous[idx])
+                    ta = self._play_ambiguous[idx]
+                    if self._play_ambiguous_no_move:
+                        cap = _format_turn_action_short(ta)
+                    else:
+                        cap = format_turn_action(ta)
                     if len(cap) > 48:
                         cap = cap[:45] + "…"
             if cap:
@@ -1663,17 +1936,21 @@ class MotleyCrewsUI:
         ]
         for key, rect, text in menu_rows:
             hover = self._menu_hover_key == key
-            bg = (95, 100, 130) if hover else (70, 74, 88)
+            sticky = self._menu_sticky_key == key
+            emphasize = hover or sticky
+            bg = (95, 100, 130) if emphasize else (70, 74, 88)
             pygame.draw.rect(self.screen, bg, rect, border_radius=6)
-            if hover:
+            if emphasize:
                 pygame.draw.rect(self.screen, (160, 185, 240), rect, 2, border_radius=6)
             self.screen.blit(self.font.render(text, True, (230, 230, 235)), (rect.x + 12, rect.y + 10))
         vm = "Isometric" if self.view_mode == ViewMode.ISOMETRIC else "Top-down"
         vkey = "view"
         vhover = self._menu_hover_key == vkey
-        vbg = (105, 110, 135) if vhover else (86, 90, 108)
+        vsticky = self._menu_sticky_key == vkey
+        vemph = vhover or vsticky
+        vbg = (105, 110, 135) if vemph else (86, 90, 108)
         pygame.draw.rect(self.screen, vbg, self.btn_view, border_radius=6)
-        if vhover:
+        if vemph:
             pygame.draw.rect(self.screen, (160, 185, 240), self.btn_view, 2, border_radius=6)
         self.screen.blit(self.font.render(f"Board view: {vm} (toggle)", True, (220, 220, 230)), (self.btn_view.x + 12, self.btn_view.y + 8))
         shover = self._menu_hover_key == "start"
@@ -1741,6 +2018,8 @@ class MotleyCrewsUI:
         view: ViewMode = ViewMode.TOP_DOWN,
         draw_marker: bool = True,
     ) -> None:
+        if self._blit_class_sprite(cx, cy, class_id, team, radius, view=view, draw_marker=draw_marker):
+            return
         col = CLASS_COLORS[class_id % len(CLASS_COLORS)]
         pygame.draw.circle(self.screen, col, (cx, cy), radius)
         pygame.draw.circle(self.screen, (20, 20, 30), (cx, cy), radius, 2)
@@ -1856,9 +2135,10 @@ class MotleyCrewsUI:
     def _draw_play(self) -> None:
         assert self.game_state is not None
         gs = self.game_state
-        obs = to_structured_observation(gs)
+        gs_board = self._state_for_board()
+        obs = to_structured_observation(gs_board)
         hl_cells, hl_rgba = self._play_highlight()
-        self._draw_flanking_rosters(gs)
+        self._draw_flanking_rosters(gs_board)
         if self.view_mode == ViewMode.TOP_DOWN:
             self._draw_board_top(obs, highlight_cells=hl_cells, hl_rgba=hl_rgba)
         else:
@@ -1887,7 +2167,7 @@ class MotleyCrewsUI:
                 )
 
         if self._is_human_turn() and self._play_slot is not None:
-            u = unit_at(gs, gs.current_player, self._play_slot)
+            u = unit_at(gs_board, gs.current_player, self._play_slot)
             if u is not None and u.alive:
                 if self.view_mode == ViewMode.TOP_DOWN:
                     cx, cy = self._cell_center_top(u.row, u.col, play=True)
@@ -2026,15 +2306,11 @@ class MotleyCrewsUI:
                 cid = int(obs.unit_class[r, c])
                 col = CLASS_COLORS[cid % len(CLASS_COLORS)] if tid >= 0 else (150, 150, 150)
                 cx, cy = self._cell_center_top(r, c, play=True)
-                pygame.draw.circle(self.screen, col, (cx, cy), tradius)
-                pygame.draw.circle(self.screen, (20, 20, 30), (cx, cy), tradius, 2)
-                label = CLASS_IDS[cid][0].upper() if 0 <= cid < len(CLASS_IDS) else "?"
-                tcol = (20, 20, 25) if sum(col) > 400 else (250, 250, 255)
-                self.screen.blit(self.font_small.render(label, True, tcol), (cx - 5, cy - 8))
-                ring = (120, 160, 255) if tid == TEAM_PLAYER_A else (255, 160, 120)
-                pygame.draw.circle(self.screen, ring, (cx, cy), tradius + 3, 2)
                 if tid >= 0:
-                    _draw_team_marker(self.screen, cx, cy, tid, view=ViewMode.TOP_DOWN, radius=tradius)
+                    self._blit_token_top(cx, cy, cid, tid, radius=tradius, view=ViewMode.TOP_DOWN)
+                else:
+                    pygame.draw.circle(self.screen, col, (cx, cy), tradius)
+                    pygame.draw.circle(self.screen, (20, 20, 30), (cx, cy), tradius, 2)
 
     def _draw_board_iso(
         self,
@@ -2078,15 +2354,11 @@ class MotleyCrewsUI:
             col = CLASS_COLORS[cid % len(CLASS_COLORS)] if tid >= 0 else (150, 150, 150)
             cx, cy = self._cell_center_iso(r, c, play=True)
             ty = cy - 4
-            pygame.draw.circle(self.screen, col, (cx, ty), ir)
-            pygame.draw.circle(self.screen, (20, 20, 30), (cx, ty), ir, 2)
-            label = CLASS_IDS[cid][0].upper() if 0 <= cid < len(CLASS_IDS) else "?"
-            tcol = (20, 20, 25) if sum(col) > 400 else (250, 250, 255)
-            self.screen.blit(self.font_small.render(label, True, tcol), (cx - 5, cy - 14))
-            ring = (120, 160, 255) if tid == TEAM_PLAYER_A else (255, 160, 120)
-            pygame.draw.circle(self.screen, ring, (cx, ty), ir + 3, 2)
             if tid >= 0:
-                _draw_team_marker(self.screen, cx, ty, tid, view=ViewMode.ISOMETRIC, radius=ir)
+                self._blit_token_top(cx, ty, cid, tid, radius=ir, view=ViewMode.ISOMETRIC)
+            else:
+                pygame.draw.circle(self.screen, col, (cx, ty), ir)
+                pygame.draw.circle(self.screen, (20, 20, 30), (cx, ty), ir, 2)
 
 
 def run(seed: int = 0) -> None:

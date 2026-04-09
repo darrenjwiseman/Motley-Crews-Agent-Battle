@@ -1,0 +1,15 @@
+---
+description: Rules engine package — state, types, legality
+globs: motley_crews_env/**/*.py
+alwaysApply: false
+---
+
+# `motley_crews_env`
+
+- **Authoritative spec**: behavior should match `rules/rules_spec.yaml`; engine docstrings reference it.
+- **`state.py`**: `GameState`, `UnitState`, setup/staging flow, `IllegalActionError` on illegal `step` inputs.
+- **`engine.py`**: `legal_actions`, `legal_setup_actions`, `step`, `setup_step`, terrain/LOS helpers, win/scoring.
+- **`types.py`**: `TurnAction`, intents, enums — keep aligned with serialization in `serialization.py` if you change wire formats.
+- **`constants.py`**: board size, teams, class IDs, terrain codes — single source for play + engine.
+
+Prefer extending existing helpers over duplicating legality checks outside the engine.

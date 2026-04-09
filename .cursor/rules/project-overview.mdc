@@ -1,0 +1,46 @@
+---
+description: Repo layout, how to run, and authoritative rules source
+alwaysApply: true
+---
+
+# Motley Crews Agent Battle — overview
+
+## Layout
+
+| Path | Role |
+|------|------|
+| `motley_crews_env/` | Rules engine: `legal_actions`, `step`, setup, win detection. Implements [rules/rules_spec.yaml](rules/rules_spec.yaml). |
+| `motley_crews_play/` | Play layer: CLI (`__main__.py`), headless `match.py` + policies, Pygame UI (`pygame_app.py`). Sprites under `motley_crews_play/assets/sprites/`. |
+| `rules/` | Game spec (`rules_spec.yaml`) and OCR reference text — not Python imports. |
+
+Core types and state live in `motley_crews_env/types.py` and `motley_crews_env/state.py`; transitions and legality in `motley_crews_env/engine.py`.
+
+## Run / install
+
+From repo root (ensure repo root is on `PYTHONPATH` — the play package adds it when needed):
+
+```bash
+pip install -r requirements.txt          # engine + pytest
+pytest                                   # tests under tests/
+```
+
+Headless matches (no GUI):
+
+```bash
+python -m motley_crews_play --mode cpu-cpu --seed 0
+python -m motley_crews_play --mode random-random --verbose
+```
+
+Pygame UI:
+
+```bash
+pip install -r requirements-play.txt
+python -m motley_crews_play --ui
+```
+
+Use **Python 3.11 or 3.12** for pygame wheels on macOS; see comments in `requirements-play.txt` if SDL build fails.
+
+## Continuity
+
+- Session-specific notes: [HANDOFF.md](HANDOFF.md) at repo root (update when stopping mid-task).
+- Stable agent onboarding + git habits: [AGENTS.md](AGENTS.md).
