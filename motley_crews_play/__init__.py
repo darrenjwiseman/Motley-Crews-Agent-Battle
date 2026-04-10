@@ -1,10 +1,27 @@
 """Interactive play layer: policies, match runner, and optional Pygame UI."""
 
+from motley_crews_play.evaluation import (
+    EloState,
+    EloTracker,
+    MatchBehaviorStats,
+    PairwiseRecord,
+    RoundRobinResult,
+    behavior_stats_from_log,
+    evaluate_pair_swapped,
+    evaluate_pair_with_logs,
+    perspective_outcome,
+    round_robin,
+    wilson_score_interval,
+    win_rate_point_estimate,
+    win_rate_with_wilson,
+)
 from motley_crews_play.match import MatchLogger, MatchResult, run_match
 from motley_crews_play.policies import (
     AgentPolicy,
+    HeuristicWeights,
     HumanInputPendingError,
     HumanPolicy,
+    ParameterizedHeuristicPolicy,
     Policy,
     RandomPolicy,
     ScriptedHeuristicPolicy,
@@ -12,12 +29,27 @@ from motley_crews_play.policies import (
 
 __all__ = [
     "AgentPolicy",
+    "HeuristicWeights",
     "HumanInputPendingError",
     "HumanPolicy",
+    "ParameterizedHeuristicPolicy",
     "Policy",
     "RandomPolicy",
     "ScriptedHeuristicPolicy",
     "MatchLogger",
     "MatchResult",
     "run_match",
+    "EloState",
+    "EloTracker",
+    "MatchBehaviorStats",
+    "PairwiseRecord",
+    "RoundRobinResult",
+    "behavior_stats_from_log",
+    "evaluate_pair_swapped",
+    "evaluate_pair_with_logs",
+    "perspective_outcome",
+    "round_robin",
+    "wilson_score_interval",
+    "win_rate_point_estimate",
+    "win_rate_with_wilson",
 ]

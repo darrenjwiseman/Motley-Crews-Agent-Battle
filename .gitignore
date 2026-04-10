@@ -2,3 +2,6 @@
 __pycache__/
 *.pyc
 .DS_Store
+
+# Generated sweep reports (copy elsewhere if you need to keep them)
+config/sweep_out/

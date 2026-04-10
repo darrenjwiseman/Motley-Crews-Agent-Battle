@@ -1,0 +1,103 @@
+# =============================================================================
+# Motley Crews — batch evaluation config
+#
+# Copy this file to eval.toml and edit, or pass a path explicitly:
+#   python -m motley_crews_play.eval_cli --config config/eval.toml
+#
+# One-click (macOS/Linux): scripts/run_eval.sh
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# [run] — how many games to simulate and when to stop a single match
+# ---------------------------------------------------------------------------
+[run]
+
+# Number of independent RNG seeds. For each seed the runner plays TWO games
+# (your policy as player A, then as player B) so setup/color bias averages out.
+# More seeds ⇒ tighter Wilson intervals but longer runtime. Typical: 20–200.
+seed_count = 8
+
+# First seed (inclusive). Actual seeds: seed_start, seed_start+1, … for seed_count steps.
+# Use different ranges for train vs validation (e.g. tune on 0–99, report on 100–199).
+seed_start = 0
+
+# Maximum half-turns (plies) per match. If reached before win/draw, the game is a
+# "timeout" in stats (see timeouts in the printed record).
+max_plies = 5000
+
+# ---------------------------------------------------------------------------
+# [mode] — pairwise (A vs B) or full round-robin over several policies
+# ---------------------------------------------------------------------------
+[mode]
+
+# "pairwise" — only [pairwise].focus vs [pairwise].opponent (fastest).
+# "round_robin" — every policy in [round_robin].policy_names plays every other.
+kind = "pairwise"
+
+# ---------------------------------------------------------------------------
+# [pairwise] — used when mode.kind = "pairwise"
+# ---------------------------------------------------------------------------
+[pairwise]
+
+# Names must match [[policies]].name below. Stats are from focus’s perspective
+# (wins/losses/draws/timeouts as the focused player).
+focus = "heuristic"
+opponent = "random"
+
+# ---------------------------------------------------------------------------
+# [round_robin] — used when mode.kind = "round_robin"
+# ---------------------------------------------------------------------------
+[round_robin]
+
+# Every unordered pair among these names is evaluated with paired seeds.
+policy_names = ["heuristic", "random", "tuned_a"]
+
+# ---------------------------------------------------------------------------
+# [[policies]] — define each player. Repeat the table for each policy.
+#
+# type = "random"
+#   Uniform random legal turn (baseline).
+#
+# type = "scripted_heuristic"
+#   Fixed default greedy one-ply CPU (same as Pygame CPU / original scripted).
+#
+# type = "parameterized_heuristic"
+#   Tunable greedy one-ply scorer; set vp_scale, damage_scale, win_bonus
+#   (same meaning as motley_crews_play.policies.HeuristicWeights).
+# ---------------------------------------------------------------------------
+
+[[policies]]
+name = "random"
+type = "random"
+
+[[policies]]
+name = "heuristic"
+type = "scripted_heuristic"
+
+[[policies]]
+name = "tuned_a"
+type = "parameterized_heuristic"
+# Weight on victory-point (score) delta per simulated ply.
+vp_scale = 10000.0
+# Weight on total enemy HP removed (damage) in that ply.
+damage_scale = 1.0
+# Terminal bonus magnitude for win/loss (must stay >> typical per-ply scores).
+win_bonus = 10000000.0
+
+# ---------------------------------------------------------------------------
+# [output] — what to print after the run
+# ---------------------------------------------------------------------------
+[output]
+
+# Print Wilson 95% interval for win rate among decided games (excludes draws/timeouts).
+print_wilson = true
+
+# Compute Elo from round-robin results (for pairwise runs, leave false — no Elo table).
+elo = false
+# Elo K-factor and starting rating (see motley_crews_play.evaluation.EloTracker).
+elo_k = 32.0
+elo_base = 1500.0
+
+# If true, log every game and aggregate behavior tags (special usage rate, move rate).
+# Slower; use for diversity / style analysis, not quick sweeps.
+behavior = false

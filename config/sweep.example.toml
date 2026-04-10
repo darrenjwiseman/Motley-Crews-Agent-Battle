@@ -1,0 +1,70 @@
+# =============================================================================
+# Motley Crews — weight sweep over ParameterizedHeuristicPolicy variants
+#
+# Each [[variants]] row runs the SAME seed range as every other row so results
+# are comparable. For each variant we evaluate:
+#   - variant vs ScriptedHeuristicPolicy (anchor: did weights beat stock CPU?)
+#   - variant vs RandomPolicy (sanity: should stay very high)
+#
+# Classification vs heuristic (Wilson 95% on decided games):
+#   strong  — lower bound > 0.5
+#   weak    — upper bound < 0.5
+#   unclear — interval crosses 0.5
+#
+# Copy to sweep.toml and run:
+#   python -m motley_crews_play.eval_sweep --config config/sweep.toml
+#   scripts/run_sweep.sh
+# =============================================================================
+
+[run]
+# Shared by all variants: seeds seed_start .. seed_start + seed_count - 1
+seed_start = 0
+seed_count = 4
+max_plies = 5000
+
+# If > 0 and < seed_count, a calibration pass runs all variants with this many seeds
+# first to print a wall-time estimate for the full run (then the full run executes).
+# Set to 0 to skip (or set [output] time_estimate = false).
+calibration_seed_count = 2
+
+[parallel]
+# Parallel evaluation uses processes (not threads): the rules engine is CPU-bound.
+# 0 = use min(cpu_count(), number of variants). 1 = sequential.
+workers = 0
+# With workers > 1, each process runs 4 * seed_count games before returning. Emit a
+# progress line every N games (stdout) so long runs are not silent. 0 = off.
+game_progress_interval = 50
+
+# Baselines are fixed in the sweep runner: ScriptedHeuristicPolicy vs RandomPolicy.
+# All variants are compared to the same anchors on the same seeds.
+
+[output]
+# Written relative to current working directory (run from repo root).
+csv_path = "config/sweep_out/results.csv"
+report_path = "config/sweep_out/report.md"
+# How many top/bottom variants to list in the prose summary
+summary_top_n = 5
+# Run calibration (when calibration_seed_count allows) and print ETA for full run
+time_estimate = true
+
+# ---------------------------------------------------------------------------
+# [[variants]] — one parameterized heuristic per row
+# ---------------------------------------------------------------------------
+
+[[variants]]
+label = "default_like"
+vp_scale = 10000.0
+damage_scale = 1.0
+win_bonus = 10000000.0
+
+[[variants]]
+label = "vp_heavy"
+vp_scale = 15000.0
+damage_scale = 1.0
+win_bonus = 10000000.0
+
+[[variants]]
+label = "damage_heavy"
+vp_scale = 10000.0
+damage_scale = 2.0
+win_bonus = 10000000.0

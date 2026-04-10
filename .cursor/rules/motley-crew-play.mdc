@@ -8,7 +8,10 @@ alwaysApply: false
 
 - **Entry**: `python -m motley_crews_play` → [__main__.py](motley_crews_play/__main__.py) (`--ui` loads `pygame_app`).
 - **`match.py`**: `run_match` wires policies to `motley_crews_env.engine` (`step`, `legal_actions`). Headless path for tests and CPU games.
-- **`policies.py`**: `Policy` protocol and baselines (`RandomPolicy`, `ScriptedHeuristicPolicy`).
+- **`policies.py`**: `Policy` protocol and baselines (`RandomPolicy`, `ScriptedHeuristicPolicy`, `ParameterizedHeuristicPolicy` + `HeuristicWeights`).
+- **`evaluation.py`**: Paired-seed match batches, Wilson intervals, `round_robin`, optional `EloTracker`, `behavior_stats_from_log` / `evaluate_pair_with_logs` for diversity tags.
+- **`eval_cli.py`**: `python -m motley_crews_play.eval_cli --config config/eval.toml` loads TOML ([`config/eval.example.toml`](config/eval.example.toml)); [`scripts/run_eval.sh`](scripts/run_eval.sh) / `run_eval.command` for one-click from repo root.
+- **`eval_sweep.py`**: `python -m motley_crews_play.eval_sweep --config config/sweep.toml` runs many `[[variants]]` on the same seeds vs `ScriptedHeuristicPolicy` + `RandomPolicy`; writes CSV + Markdown ([`config/sweep.example.toml`](config/sweep.example.toml)); [`scripts/run_sweep.sh`](scripts/run_sweep.sh) / `run_sweep.command`. Optional `[parallel].workers` (process pool; 0 = auto) and `[run].calibration_seed_count` + `[output].time_estimate` for ETA from a short calibration pass; `--workers` / `-j` overrides workers.
 - **`pygame_app.py`**: Large UI module; imports engine APIs (`legal_actions`, `step`, `preview_after_move`, etc.). Sprite paths resolve via `_candidate_sprite_png_paths` — assets live under `motley_crews_play/assets/`.
 
 UI changes should not change rules: keep authoritative logic in `motley_crews_env`.
