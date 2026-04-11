@@ -4,13 +4,13 @@ Update this file when you stop mid-task so the next session (human or agent) can
 
 ## Current goal
 
-Headless **evaluation** and **weight sweep** tooling is in place. **`ParameterizedHeuristicPolicy`** now supports **per-class** (`w_class` / `w_knight`…), **group** (`group_melee`, `group_mage`, `group_arbalist`), and **deployment** (`deploy_forward`, `deploy_center`) weights; **`run_match`** uses **`choose_setup`** during setup unless `setup_random=True`. Pygame/rules core unchanged.
+**Batch weight sweep** (`run_sweep_batch` in `eval_sweep.py`) is implemented: splits seeds across parallel subprocesses, per-shard logs, optional macOS Terminal `tail -f` windows (`--batch-terminals`), **sequential per-shard calibration** with scaled ETAs and **aggregated wall time** (`max` over shards), **`Proceed? [Y/n]`** after ETA (`--batch-yes` / `--yes` to skip), **work-weighted aggregate progress bar** on the supervisor during full shard runs. **`config/sweep.example.wide_separation.toml`** adds ~50% stronger weight separation vs `sweep.example.toml` for experiments. Core policies / Pygame unchanged.
 
 ## Next steps
 
-1. Optional: tune phased preview timing (`cpu_delay_ms` / phase fractions in `pygame_app.py`) if CPU/human previews feel slow.
-2. Optional: if combined move+action previews should show LOS from the post-move position, compute paths using `preview_after_move` for the acting piece when `move.actor_slot == action.actor_slot`.
-3. Run sweeps with trimmed `[[variants]]` in `config/sweep.toml` (see `config/sweep.example.toml` for full preset list); adjust `[parallel].game_progress_interval` if logs are too chatty or too quiet.
+1. Optional: tune sweep `seed_count` / variants when results cluster ~50% vs stock; use wide-separation example or generate variant grids externally.
+2. Optional: tune phased preview timing (`cpu_delay_ms` / phase fractions in `pygame_app.py`) if CPU/human previews feel slow.
+3. Optional: if combined move+action previews should show LOS from the post-move position, compute paths using `preview_after_move` when `move.actor_slot == action.actor_slot`.
 
 ## Files in progress
 
@@ -21,16 +21,15 @@ Headless **evaluation** and **weight sweep** tooling is in place. **`Parameteriz
 ## Commands verified this session
 
 ```text
-.venv/bin/python -m pytest tests/ -q
+.venv/bin/python -m pytest tests/test_eval_sweep.py -q
 ```
 
 ## Notes / blockers
 
-- **Parameterized heuristic weights** (`motley_crews_play/policies.py`): `HeuristicWeights` adds class/group/deploy fields; play scoring multiplies the primary score by a **geometric mean** of `effective_actor_weight` over move/action actors; **`heuristic_weights_from_spec`** parses TOML rows (including `w_class` arrays). **`choose_setup`** on `ParameterizedHeuristicPolicy` / `RandomPolicy`; **`score_setup_placement`** for deployment heuristic.
-- **`run_match`** (`match.py`): policy-driven alternating placement by default; **`setup_random=True`** restores legacy `complete_setup_random` (tests / RNG parity).
-- **Eval / sweep**: `eval_cli.py` passes full policy tables through `heuristic_weights_from_spec`; `eval_sweep.py` stores each variant’s **full spec** in CSV; sweep **report** includes a **“How to interpret this report”** section (paired sides, ~50% vs stock, Wilson `unclear`, identical rows).
-- **`config/sweep.example.toml`**: documents optional weight keys and lists **12** example `[[variants]]` presets (copy to `sweep.toml`, delete unused blocks).
-- **`evaluation.py`**: paired seeds, Wilson intervals, round-robin, Elo, behavior stats from logs (unchanged).
-- **`eval_sweep.py`**: process pool, calibration/ETA, parallel progress lines (unchanged behavior aside from variant CSV columns).
-- Scripts: `scripts/run_eval.sh`, `run_eval.command`, `run_sweep.sh`, `run_sweep.command`. Generated sweep outputs under `config/sweep_out/` are gitignored.
-- **VP / draw / FX / path highlights** (older): `motley_crews_env` syncs score from dead units; simultaneous 4–4 VP is a draw; `motley_crews_play` has dual-layer highlights, phased CPU/human previews (`highlight_geometry.py`), and no recurring **move** range/path in preview phases when a turn includes both move and action (action-only range/path for those phases).
+- **`motley_crews_play/eval_sweep.py`**: non-batch `run_from_toml` unchanged in spirit (calibration/ETA). **`run_sweep_batch`** merges shard CSVs into `*_master` outputs; **`BatchSweepAborted`** when user declines at prompt (CLI exits 0). **`tomli-w`** in `requirements.txt` for shard TOML writes.
+- **Batch CLI**: `--batch`, `--batch-shards`, `--batch-terminals`, `--batch-log-dir`, `--batch-yes` / `--yes`.
+- **Scripts**: `scripts/run_sweep_batch.sh`, `run_sweep_batch.command`, `run_sweep_batch_terminals.sh`, `run_sweep_batch_terminals.command` (repo root `scripts/`).
+- **Configs**: `config/sweep.example.toml` (12 presets), `config/sweep.example.wide_separation.toml` (same labels, wider numeric separation); outputs default to distinct paths in the wide example (`results_wide.csv`).
+- **`ParameterizedHeuristicPolicy`** / **`HeuristicWeights`**: see prior notes in git history and `policies.py`; sweep rows still parsed via **`heuristic_weights_from_spec`**.
+- **`run_match`**: policy-driven setup unless `setup_random=True`.
+- Generated sweep outputs under `config/sweep_out/` remain gitignored.

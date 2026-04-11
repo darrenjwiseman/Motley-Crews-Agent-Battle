@@ -17,13 +17,13 @@
 
 [run]
 seed_start = 0
-seed_count = 100
+seed_count = 4
 max_plies = 5000
 calibration_seed_count = 2
 
 [parallel]
 workers = 0
-game_progress_interval = 10
+game_progress_interval = 50
 
 [output]
 csv_path = "config/sweep_out/results_wide.csv"
