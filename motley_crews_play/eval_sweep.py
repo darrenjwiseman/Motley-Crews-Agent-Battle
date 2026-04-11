@@ -27,7 +27,12 @@ if str(_ROOT) not in sys.path:
 
 from motley_crews_play.evaluation import PairwiseRecord, perspective_outcome, win_rate_with_wilson
 from motley_crews_play.match import run_match
-from motley_crews_play.policies import HeuristicWeights, ParameterizedHeuristicPolicy, RandomPolicy, ScriptedHeuristicPolicy
+from motley_crews_play.policies import (
+    ParameterizedHeuristicPolicy,
+    RandomPolicy,
+    ScriptedHeuristicPolicy,
+    heuristic_weights_from_spec,
+)
 
 
 class SweepConfigError(ValueError):
@@ -70,17 +75,10 @@ def load_variants(toml: dict[str, Any]) -> list[dict[str, Any]]:
         if not isinstance(row, dict):
             raise SweepConfigError("Each [[variants]] entry must be a table")
         label = str(_req(row, "label", "variants"))
-        vp_scale = float(_req(row, "vp_scale", label))
-        damage_scale = float(_req(row, "damage_scale", label))
-        win_bonus = float(_req(row, "win_bonus", label))
-        out.append(
-            {
-                "label": label,
-                "vp_scale": vp_scale,
-                "damage_scale": damage_scale,
-                "win_bonus": win_bonus,
-            }
-        )
+        float(_req(row, "vp_scale", label))
+        float(_req(row, "damage_scale", label))
+        float(_req(row, "win_bonus", label))
+        out.append(dict(row))
     return out
 
 
@@ -145,12 +143,16 @@ def classify_vs_anchor(wilson_lo: float, wilson_hi: float) -> str:
     return "unclear"
 
 
+def _variant_spec_csv_value(v: Any) -> Any:
+    if isinstance(v, (list, tuple)):
+        return ",".join(str(x) for x in v)
+    return v
+
+
 @dataclass
 class VariantResult:
     label: str
-    vp_scale: float
-    damage_scale: float
-    win_bonus: float
+    spec: dict[str, Any]
     vs_heuristic: PairwiseRecord
     vs_random: PairwiseRecord
 
@@ -158,27 +160,29 @@ class VariantResult:
         ph, loh, hih = win_rate_with_wilson(self.vs_heuristic)
         pr, lor, hir = win_rate_with_wilson(self.vs_random)
         cls = classify_vs_anchor(loh, hih)
-        return {
-            "label": self.label,
-            "vp_scale": self.vp_scale,
-            "damage_scale": self.damage_scale,
-            "win_bonus": self.win_bonus,
-            "vs_heuristic_wins": self.vs_heuristic.wins,
-            "vs_heuristic_losses": self.vs_heuristic.losses,
-            "vs_heuristic_draws": self.vs_heuristic.draws,
-            "vs_heuristic_timeouts": self.vs_heuristic.timeouts,
-            "vs_heuristic_win_rate": f"{ph:.6f}",
-            "vs_heuristic_wilson_lo": f"{loh:.6f}",
-            "vs_heuristic_wilson_hi": f"{hih:.6f}",
-            "vs_heuristic_class": cls,
-            "vs_random_wins": self.vs_random.wins,
-            "vs_random_losses": self.vs_random.losses,
-            "vs_random_draws": self.vs_random.draws,
-            "vs_random_timeouts": self.vs_random.timeouts,
-            "vs_random_win_rate": f"{pr:.6f}",
-            "vs_random_wilson_lo": f"{lor:.6f}",
-            "vs_random_wilson_hi": f"{hir:.6f}",
-        }
+        out: dict[str, Any] = {"label": self.label}
+        for k in sorted(self.spec.keys()):
+            out[k] = _variant_spec_csv_value(self.spec[k])
+        out.update(
+            {
+                "vs_heuristic_wins": self.vs_heuristic.wins,
+                "vs_heuristic_losses": self.vs_heuristic.losses,
+                "vs_heuristic_draws": self.vs_heuristic.draws,
+                "vs_heuristic_timeouts": self.vs_heuristic.timeouts,
+                "vs_heuristic_win_rate": f"{ph:.6f}",
+                "vs_heuristic_wilson_lo": f"{loh:.6f}",
+                "vs_heuristic_wilson_hi": f"{hih:.6f}",
+                "vs_heuristic_class": cls,
+                "vs_random_wins": self.vs_random.wins,
+                "vs_random_losses": self.vs_random.losses,
+                "vs_random_draws": self.vs_random.draws,
+                "vs_random_timeouts": self.vs_random.timeouts,
+                "vs_random_win_rate": f"{pr:.6f}",
+                "vs_random_wilson_lo": f"{lor:.6f}",
+                "vs_random_wilson_hi": f"{hir:.6f}",
+            }
+        )
+        return out
 
 
 def _progress_bar(done: int, total: int, width: int = 36) -> str:
@@ -257,11 +261,7 @@ def _evaluate_variant_streaming(
     occasional lines to stdout so long runs are not silent until a variant finishes.
     """
     label = spec["label"]
-    w = HeuristicWeights(
-        vp_scale=spec["vp_scale"],
-        damage_scale=spec["damage_scale"],
-        win_bonus=spec["win_bonus"],
-    )
+    w = heuristic_weights_from_spec(spec)
     pol = ParameterizedHeuristicPolicy(w)
     anchor_h = ScriptedHeuristicPolicy()
     anchor_r = RandomPolicy()
@@ -307,11 +307,10 @@ def _evaluate_variant_streaming(
             _maybe_parallel_stderr_progress(
                 label, gi, g_in_v, rec_h, rec_r, parallel_progress_every
             )
+    spec_out = {k: v for k, v in spec.items() if k != "label"}
     return VariantResult(
         label=label,
-        vp_scale=spec["vp_scale"],
-        damage_scale=spec["damage_scale"],
-        win_bonus=spec["win_bonus"],
+        spec=spec_out,
         vs_heuristic=rec_h,
         vs_random=rec_r,
     )
@@ -443,7 +442,13 @@ def write_csv(path: Path, rows: list[VariantResult]) -> None:
     dicts = [r.row_dict() for r in rows]
     if not dicts:
         return
-    fieldnames = list(dicts[0].keys())
+    fieldnames: list[str] = []
+    seen: set[str] = set()
+    for d in dicts:
+        for k in d:
+            if k not in seen:
+                seen.add(k)
+                fieldnames.append(k)
     with path.open("w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=fieldnames)
         w.writeheader()
@@ -496,7 +501,8 @@ def write_report(
         ph, _, _ = win_rate_with_wilson(r.vs_heuristic)
         lines.append(
             f"- `{r.label}` — win rate {ph:.4f}, Wilson [{lo:.4f}, {hi:.4f}]  "
-            f"(vp_scale={r.vp_scale}, damage_scale={r.damage_scale}, win_bonus={r.win_bonus})"
+            f"(vp_scale={r.spec['vp_scale']}, damage_scale={r.spec['damage_scale']}, "
+            f"win_bonus={r.spec['win_bonus']})"
         )
     if not strong:
         lines.append("- (none)")
@@ -514,7 +520,8 @@ def write_report(
         ph, _, _ = win_rate_with_wilson(r.vs_heuristic)
         lines.append(
             f"- `{r.label}` — win rate {ph:.4f}, Wilson [{lo:.4f}, {hi:.4f}]  "
-            f"(vp_scale={r.vp_scale}, damage_scale={r.damage_scale}, win_bonus={r.win_bonus})"
+            f"(vp_scale={r.spec['vp_scale']}, damage_scale={r.spec['damage_scale']}, "
+            f"win_bonus={r.spec['win_bonus']})"
         )
 
     lines.extend(["", "## Full table (sorted by Wilson lower bound vs heuristic, descending)", ""])
@@ -529,7 +536,7 @@ def write_report(
         cls = classify_vs_anchor(loh, hih)
         lines.append(
             f"| {r.label} | {ph:.4f} | {loh:.4f} | {hih:.4f} | {cls} | {pr:.4f} | "
-            f"{r.vp_scale} | {r.damage_scale} | {r.win_bonus} |"
+            f"{r.spec['vp_scale']} | {r.spec['damage_scale']} | {r.spec['win_bonus']} |"
         )
 
     lines.extend(
@@ -537,8 +544,33 @@ def write_report(
             "",
             "---",
             "",
-            "**Interpretation:** `vs random` should stay near 1.0; if it drops, treat the run as suspect. "
-            "Increase `seed_count` if many variants are **unclear**.",
+            "## How to interpret this report",
+            "",
+            "- **Paired sides:** For each seed, the variant plays `ScriptedHeuristicPolicy` as player 0, "
+            "then as player 1 (same seed). `vs heur WR` is wins / (wins + losses); draws are excluded "
+            "from that denominator.",
+            "",
+            "- **~0.5 vs stock is not a coin flip:** It means the variant wins as often as it loses under "
+            "this seating. When a variant matches stock behavior, expect **about 50%**—that is **even "
+            "with the anchor**, not RNG from the runner.",
+            "",
+            "- **Wilson interval and `unclear`:** Strong/weak use the 95% Wilson interval vs 0.5. If the "
+            "point estimate is exactly 0.5, the interval **crosses** 0.5, so the class is **unclear** "
+            "even with many seeds.",
+            "",
+            "- **`vs random`:** Sanity check that the heuristic beats random; it is **not** used for "
+            "strong/weak vs stock.",
+            "",
+            "- **Identical rows across variants:** Same numbers mean **identical win/loss outcomes** on "
+            "this run—not statistically independent rows. Often, nearby weights did not change chosen "
+            "moves; a wider sweep or other metrics can expose differences.",
+            "",
+            "- **More seeds:** Larger `seed_count` helps when there is a **real** edge to measure; it "
+            "will not separate variants that play identically.",
+            "",
+            "**Quick checks:** `vs random` should stay near 1.0; if it drops, treat the run as suspect. "
+            "If many variants stay **unclear** because effects are small, try more seeds or stronger "
+            "weight separation.",
             "",
         ]
     )

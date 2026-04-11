@@ -25,6 +25,9 @@ from motley_crews_play.policies import (
     Policy,
     RandomPolicy,
     ScriptedHeuristicPolicy,
+    effective_actor_weight,
+    heuristic_weights_from_spec,
+    score_setup_placement,
 )
 
 __all__ = [
@@ -36,6 +39,9 @@ __all__ = [
     "Policy",
     "RandomPolicy",
     "ScriptedHeuristicPolicy",
+    "effective_actor_weight",
+    "heuristic_weights_from_spec",
+    "score_setup_placement",
     "MatchLogger",
     "MatchResult",
     "run_match",

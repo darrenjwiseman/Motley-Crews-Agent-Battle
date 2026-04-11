@@ -64,6 +64,8 @@ policy_names = ["heuristic", "random", "tuned_a"]
 # type = "parameterized_heuristic"
 #   Tunable greedy one-ply scorer; set vp_scale, damage_scale, win_bonus
 #   (same meaning as motley_crews_play.policies.HeuristicWeights).
+#   Optional: w_class = [..5 floats..] or w_knight, … w_arbalist;
+#   group_melee, group_mage, group_arbalist; deploy_forward, deploy_center.
 # ---------------------------------------------------------------------------
 
 [[policies]]

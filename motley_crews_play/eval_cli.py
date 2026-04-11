@@ -29,11 +29,11 @@ from motley_crews_play.evaluation import (
     win_rate_with_wilson,
 )
 from motley_crews_play.policies import (
-    HeuristicWeights,
     ParameterizedHeuristicPolicy,
     Policy,
     RandomPolicy,
     ScriptedHeuristicPolicy,
+    heuristic_weights_from_spec,
 )
 
 
@@ -55,11 +55,7 @@ def _policy_from_table(row: dict[str, Any]) -> Policy:
     if ptype == "scripted_heuristic":
         return ScriptedHeuristicPolicy()
     if ptype == "parameterized_heuristic":
-        w = HeuristicWeights(
-            vp_scale=float(row.get("vp_scale", 10_000.0)),
-            damage_scale=float(row.get("damage_scale", 1.0)),
-            win_bonus=float(row.get("win_bonus", 10_000_000.0)),
-        )
+        w = heuristic_weights_from_spec(row)
         return ParameterizedHeuristicPolicy(w)
     raise EvalConfigError(f"Unknown policy type {ptype!r} for {name!r}")
 

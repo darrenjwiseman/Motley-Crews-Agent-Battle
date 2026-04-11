@@ -84,6 +84,8 @@ def test_run_from_toml_writes_files(tmp_path: Path) -> None:
     md = report_p.read_text(encoding="utf-8")
     assert "Heuristic weight sweep report" in md
     assert "Full table" in md
+    assert "How to interpret this report" in md
+    assert "Paired sides" in md
 
 
 def test_run_sweep_parallel_two_variants(tmp_path: Path) -> None:

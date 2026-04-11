@@ -19,7 +19,7 @@
 [run]
 # Shared by all variants: seeds seed_start .. seed_start + seed_count - 1
 seed_start = 0
-seed_count = 200
+seed_count = 100
 max_plies = 5000
 
 # If > 0 and < seed_count, a calibration pass runs all variants with this many seeds
@@ -31,6 +31,9 @@ calibration_seed_count = 2
 # Parallel evaluation uses processes (not threads): the rules engine is CPU-bound.
 # 0 = use min(cpu_count(), number of variants). 1 = sequential.
 workers = 0
+# With workers > 1, each process runs 4 * seed_count games before returning. Emit a
+# progress line every N games (stdout) so long runs are not silent. 0 = off.
+game_progress_interval = 50
 
 # Baselines are fixed in the sweep runner: ScriptedHeuristicPolicy vs RandomPolicy.
 # All variants are compared to the same anchors on the same seeds.
@@ -46,7 +49,17 @@ time_estimate = true
 
 # ---------------------------------------------------------------------------
 # [[variants]] — one parameterized heuristic per row
+#
+# Copy this file to sweep.toml and delete any [[variants]] blocks you do not need.
+#
+# Required: label, vp_scale, damage_scale, win_bonus
+# Optional (see motley_crews_play.policies.HeuristicWeights):
+#   w_class = [knight, barbarian, white_mage, black_mage, arbalist]  # or w_knight, w_barbarian, …
+#   group_melee, group_mage, group_arbalist  # extra multipliers on melee / mages / arbalist
+#   deploy_forward, deploy_center  # geometry terms for setup (0 = class weights only)
 # ---------------------------------------------------------------------------
+
+# --- Global mix (VP vs damage vs terminal bonus) ---
 
 [[variants]]
 label = "default_like"
@@ -65,3 +78,74 @@ label = "damage_heavy"
 vp_scale = 10000.0
 damage_scale = 2.0
 win_bonus = 10000000.0
+
+# --- Groups + deployment geometry ---
+
+[[variants]]
+label = "melee_aggressive"
+vp_scale = 10000.0
+damage_scale = 1.0
+win_bonus = 10000000.0
+group_melee = 2.0
+deploy_forward = 0.5
+
+[[variants]]
+label = "mage_focus"
+vp_scale = 10000.0
+damage_scale = 1.0
+win_bonus = 10000000.0
+group_mage = 2.0
+deploy_center = 0.4
+
+[[variants]]
+label = "arb_focus"
+vp_scale = 10000.0
+damage_scale = 1.0
+win_bonus = 10000000.0
+group_arbalist = 2.0
+
+[[variants]]
+label = "spell_reach"
+vp_scale = 10000.0
+damage_scale = 1.0
+win_bonus = 10000000.0
+# Bump white_mage, black_mage, arbalist together (ranged / casters)
+w_class = [1.0, 1.0, 1.5, 1.5, 1.5]
+deploy_forward = 0.3
+
+# --- Single-class emphasis (one w_*; others default to 1.0) ---
+
+[[variants]]
+label = "knight_emphasis"
+vp_scale = 10000.0
+damage_scale = 1.0
+win_bonus = 10000000.0
+w_knight = 2.0
+
+[[variants]]
+label = "barbarian_emphasis"
+vp_scale = 10000.0
+damage_scale = 1.0
+win_bonus = 10000000.0
+w_barbarian = 2.0
+
+[[variants]]
+label = "white_mage_emphasis"
+vp_scale = 10000.0
+damage_scale = 1.0
+win_bonus = 10000000.0
+w_white_mage = 2.0
+
+[[variants]]
+label = "black_mage_emphasis"
+vp_scale = 10000.0
+damage_scale = 1.0
+win_bonus = 10000000.0
+w_black_mage = 2.0
+
+[[variants]]
+label = "arbalist_emphasis"
+vp_scale = 10000.0
+damage_scale = 1.0
+win_bonus = 10000000.0
+w_arbalist = 2.0
