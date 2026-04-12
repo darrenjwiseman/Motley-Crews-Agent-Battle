@@ -82,6 +82,11 @@ from motley_crews_env.state import (
     slot_unit,
     unit_at,
 )
+from motley_crews_play.cpu_variants import (
+    CPU_VARIANTS,
+    default_cpu_variant_index,
+    policy_for_variant_index,
+)
 from motley_crews_play.formatting import (
     format_play_log_line,
     format_step_outcome,
@@ -89,7 +94,23 @@ from motley_crews_play.formatting import (
     player_label,
 )
 from motley_crews_play.highlight_geometry import path_cells_for_turn, preview_emphasis_cells
-from motley_crews_play.policies import ScriptedHeuristicPolicy
+from motley_crews_play.policies import ParameterizedHeuristicPolicy
+
+
+def _roster_team_for_move(mi: MoveIntent, pl: int) -> int:
+    return pl if mi.actor_team is None else mi.actor_team
+
+
+def _roster_team_for_action(a: ActionBasicAttack | ActionSpecial, pl: int) -> int:
+    return pl if a.actor_team is None else a.actor_team
+
+
+def _move_matches_actor(mi: MoveIntent, roster_team: int, slot: int, pl: int) -> bool:
+    return mi.actor_slot == slot and _roster_team_for_move(mi, pl) == roster_team
+
+
+def _action_matches_actor(a: ActionBasicAttack | ActionSpecial, roster_team: int, slot: int, pl: int) -> bool:
+    return a.actor_slot == slot and _roster_team_for_action(a, pl) == roster_team
 
 
 class ViewMode(IntEnum):
@@ -281,15 +302,19 @@ def _preview_phase_index(timer: float, total_ms: float) -> int:
 
 
 def _range_cells_for_action_only(
-    legal: list[TurnAction], ta: TurnAction
+    gs: GameState, legal: list[TurnAction], ta: TurnAction
 ) -> tuple[set[tuple[int, int]], tuple[int, int, int, int]]:
     """Attack/special target range only (used when the turn includes both move and action)."""
+    pl = gs.current_player
     assert ta.action is not None
     if isinstance(ta.action, ActionBasicAttack):
-        return _basic_targets_for_slot(legal, ta.action.actor_slot), HL_ATTACK
+        ba = ta.action
+        rt = _roster_team_for_action(ba, pl)
+        return _basic_targets_for_slot(legal, rt, ba.actor_slot, pl), HL_ATTACK
     sp = ta.action
     assert isinstance(sp, ActionSpecial)
     sid = int(sp.special_id)
+    rt = _roster_team_for_action(sp, pl)
     slot = sp.actor_slot
     if sid == int(SpecialId.MAGIC_BOMB) and sp.target_square is not None:
         tr, tc = sp.target_square
@@ -298,21 +323,23 @@ def _range_cells_for_action_only(
             if 0 <= br < BOARD_SIZE and 0 <= bc < BOARD_SIZE:
                 cells.add((br, bc))
         return cells, HL_SPECIAL
-    return _special_target_cells(legal, slot, sid), HL_SPECIAL
+    return _special_target_cells(legal, rt, slot, sid, pl), HL_SPECIAL
 
 
 def _range_cells_for_turn(gs: GameState, legal: list[TurnAction], ta: TurnAction) -> tuple[set[tuple[int, int]], tuple[int, int, int, int]]:
     """Full legal range for the component of the turn being previewed (phase A)."""
+    pl = gs.current_player
     if ta.resurrect_place is not None:
         return {ta.resurrect_place}, (255, 220, 80, 88)
     # Move+action: do not repeat move-destination highlights during action preview phases
     if ta.move is not None and ta.action is not None:
-        return _range_cells_for_action_only(legal, ta)
+        return _range_cells_for_action_only(gs, legal, ta)
     if ta.move is not None:
-        return _move_destinations_for_slot(legal, ta.move.actor_slot), HL_MOVE
+        rt = _roster_team_for_move(ta.move, pl)
+        return _move_destinations_for_slot(legal, rt, ta.move.actor_slot, pl), HL_MOVE
     if ta.action is None:
         return set(), HL_MOVE
-    return _range_cells_for_action_only(legal, ta)
+    return _range_cells_for_action_only(gs, legal, ta)
 
 
 def _build_preview_spec(
@@ -337,11 +364,14 @@ def _build_preview_spec(
     return BoardHighlightSpec(empty, HL_MOVE, em, HL_PATH, bo)
 
 
-def _actor_slot_at_cell(gs: GameState, r: int, c: int) -> Optional[int]:
-    for sl in range(FIGURES_PER_SIDE):
-        u = unit_at(gs, gs.current_player, sl)
-        if u is not None and u.alive and u.row == r and u.col == c:
-            return sl
+def _actor_team_slot_at_cell(gs: GameState, r: int, c: int) -> Optional[tuple[int, int]]:
+    """Roster (team, slot) for a figure at ``(r,c)`` controlled by the current player (includes converts)."""
+    pl = gs.current_player
+    for t in (TEAM_PLAYER_A, TEAM_PLAYER_B):
+        for sl in range(FIGURES_PER_SIDE):
+            u = unit_at(gs, t, sl)
+            if u is not None and u.alive and u.controller == pl and u.row == r and u.col == c:
+                return (t, sl)
     return None
 
 
@@ -384,65 +414,79 @@ def _format_turn_action_short(ta: TurnAction) -> str:
     return f"{abbr} {name}{extra}"
 
 
-def _move_destinations_for_slot(legal: list[TurnAction], slot: int) -> set[tuple[int, int]]:
+def _move_destinations_for_slot(
+    legal: list[TurnAction], roster_team: int, slot: int, pl: int
+) -> set[tuple[int, int]]:
     out: set[tuple[int, int]] = set()
     for ta in legal:
-        if ta.move is not None and ta.move.actor_slot == slot:
+        if ta.move is not None and _move_matches_actor(ta.move, roster_team, slot, pl):
             out.add(ta.move.destination)
     return out
 
 
-def _basic_targets_for_slot(legal: list[TurnAction], slot: int) -> set[tuple[int, int]]:
+def _basic_targets_for_slot(
+    legal: list[TurnAction], roster_team: int, slot: int, pl: int
+) -> set[tuple[int, int]]:
     out: set[tuple[int, int]] = set()
     for ta in legal:
-        if ta.action is not None and isinstance(ta.action, ActionBasicAttack) and ta.action.actor_slot == slot:
-            out.add(ta.action.target_square)
+        if ta.action is not None and isinstance(ta.action, ActionBasicAttack):
+            if _action_matches_actor(ta.action, roster_team, slot, pl):
+                out.add(ta.action.target_square)
     return out
 
 
-def _special_ids_for_slot(legal: list[TurnAction], slot: int) -> list[int]:
+def _special_ids_for_slot(legal: list[TurnAction], roster_team: int, slot: int, pl: int) -> list[int]:
     seen: set[int] = set()
     for ta in legal:
-        if ta.action is not None and isinstance(ta.action, ActionSpecial) and ta.action.actor_slot == slot:
-            seen.add(int(ta.action.special_id))
+        if ta.action is not None and isinstance(ta.action, ActionSpecial):
+            if _action_matches_actor(ta.action, roster_team, slot, pl):
+                seen.add(int(ta.action.special_id))
     return sorted(seen)
 
 
-def _turns_for_move_dest(legal: list[TurnAction], slot: int, dest: tuple[int, int]) -> list[TurnAction]:
-    return [ta for ta in legal if ta.move is not None and ta.move.actor_slot == slot and ta.move.destination == dest]
+def _turns_for_move_dest(
+    legal: list[TurnAction], roster_team: int, slot: int, dest: tuple[int, int], pl: int
+) -> list[TurnAction]:
+    return [
+        ta
+        for ta in legal
+        if ta.move is not None
+        and _move_matches_actor(ta.move, roster_team, slot, pl)
+        and ta.move.destination == dest
+    ]
 
 
 def _turns_for_basic_target(
-    legal: list[TurnAction], slot: int, target: tuple[int, int]
+    legal: list[TurnAction], roster_team: int, slot: int, target: tuple[int, int], pl: int
 ) -> list[TurnAction]:
     return [
         ta
         for ta in legal
         if ta.action is not None
         and isinstance(ta.action, ActionBasicAttack)
-        and ta.action.actor_slot == slot
+        and _action_matches_actor(ta.action, roster_team, slot, pl)
         and ta.action.target_square == target
     ]
 
 
 def _turns_for_special_menu(
-    legal: list[TurnAction], slot: int, special_id: int
+    legal: list[TurnAction], roster_team: int, slot: int, special_id: int, pl: int
 ) -> list[TurnAction]:
     return [
         ta
         for ta in legal
         if ta.action is not None
         and isinstance(ta.action, ActionSpecial)
-        and ta.action.actor_slot == slot
+        and _action_matches_actor(ta.action, roster_team, slot, pl)
         and int(ta.action.special_id) == special_id
     ]
 
 
 def _special_target_cells(
-    legal: list[TurnAction], slot: int, special_id: int
+    legal: list[TurnAction], roster_team: int, slot: int, special_id: int, pl: int
 ) -> set[tuple[int, int]]:
     out: set[tuple[int, int]] = set()
-    for ta in _turns_for_special_menu(legal, slot, special_id):
+    for ta in _turns_for_special_menu(legal, roster_team, slot, special_id, pl):
         assert ta.action is not None and isinstance(ta.action, ActionSpecial)
         sp = ta.action
         if int(sp.special_id) == int(SpecialId.ANIMATE_DEAD):
@@ -453,7 +497,7 @@ def _special_target_cells(
 
 
 def _curse_x_options(
-    legal: list[TurnAction], slot: int, target: tuple[int, int]
+    legal: list[TurnAction], roster_team: int, slot: int, target: tuple[int, int], pl: int
 ) -> list[int]:
     xs: set[int] = set()
     for ta in legal:
@@ -462,19 +506,19 @@ def _curse_x_options(
         sp = ta.action
         if int(sp.special_id) != int(SpecialId.CURSE):
             continue
-        if sp.actor_slot != slot or sp.target_square != target or sp.curse_x is None:
+        if not _action_matches_actor(sp, roster_team, slot, pl) or sp.target_square != target or sp.curse_x is None:
             continue
         xs.add(int(sp.curse_x))
     return sorted(xs)
 
 
-def _animate_dead_slots(legal: list[TurnAction], slot: int) -> list[int]:
+def _animate_dead_slots(legal: list[TurnAction], roster_team: int, slot: int, pl: int) -> list[int]:
     slots: set[int] = set()
     for ta in legal:
         if ta.action is None or not isinstance(ta.action, ActionSpecial):
             continue
         sp = ta.action
-        if int(sp.special_id) != int(SpecialId.ANIMATE_DEAD) or sp.actor_slot != slot:
+        if int(sp.special_id) != int(SpecialId.ANIMATE_DEAD) or not _action_matches_actor(sp, roster_team, slot, pl):
             continue
         if sp.animate_dead_crew_slot is not None:
             slots.add(int(sp.animate_dead_crew_slot))
@@ -556,56 +600,63 @@ def _animate_dead_slots_candidates(candidates: list[TurnAction]) -> list[int]:
     return sorted(slots)
 
 
-def _slot_can_act_after_move(candidates: list[TurnAction], slot: int) -> bool:
+def _slot_can_act_after_move(
+    candidates: list[TurnAction], roster_team: int, slot: int, pl: int
+) -> bool:
     for ta in candidates:
         if ta.action is None:
             continue
-        if ta.action.actor_slot == slot:
+        if _action_matches_actor(ta.action, roster_team, slot, pl):
             return True
     return False
 
 
 def _cells_with_actionable_figures(gs: GameState, candidates: list[TurnAction]) -> set[tuple[int, int]]:
-    """Board cells of friendly figures that may take the action sub-step for this pending move."""
-    slots: set[int] = set()
+    """Board cells of figures that may take the action sub-step for this pending move (includes converts)."""
+    pl = gs.current_player
+    actors: set[tuple[int, int]] = set()
     for ta in candidates:
         if ta.action is not None:
-            slots.add(ta.action.actor_slot)
+            actors.add((_roster_team_for_action(ta.action, pl), ta.action.actor_slot))
     out: set[tuple[int, int]] = set()
-    for sl in slots:
-        u = unit_at(gs, gs.current_player, sl)
-        if u is not None and u.alive and u.row >= 0:
+    for t, sl in actors:
+        u = unit_at(gs, t, sl)
+        if u is not None and u.alive and u.controller == pl and u.row >= 0:
             out.add((u.row, u.col))
     return out
 
 
 def _basic_targets_for_slot_in_candidates(
-    candidates: list[TurnAction], slot: int
+    candidates: list[TurnAction], roster_team: int, slot: int, pl: int
 ) -> set[tuple[int, int]]:
     out: set[tuple[int, int]] = set()
     for ta in candidates:
-        if ta.action is not None and isinstance(ta.action, ActionBasicAttack) and ta.action.actor_slot == slot:
-            out.add(ta.action.target_square)
+        if ta.action is not None and isinstance(ta.action, ActionBasicAttack):
+            if _action_matches_actor(ta.action, roster_team, slot, pl):
+                out.add(ta.action.target_square)
     return out
 
 
-def _special_ids_for_slot_candidates(candidates: list[TurnAction], slot: int) -> list[int]:
+def _special_ids_for_slot_candidates(
+    candidates: list[TurnAction], roster_team: int, slot: int, pl: int
+) -> list[int]:
     seen: set[int] = set()
     for ta in candidates:
-        if ta.action is not None and isinstance(ta.action, ActionSpecial) and ta.action.actor_slot == slot:
-            seen.add(int(ta.action.special_id))
+        if ta.action is not None and isinstance(ta.action, ActionSpecial):
+            if _action_matches_actor(ta.action, roster_team, slot, pl):
+                seen.add(int(ta.action.special_id))
     return sorted(seen)
 
 
 def _special_target_cells_for_slot_candidates(
-    candidates: list[TurnAction], slot: int, special_id: int
+    candidates: list[TurnAction], roster_team: int, slot: int, special_id: int, pl: int
 ) -> set[tuple[int, int]]:
     out: set[tuple[int, int]] = set()
     for ta in candidates:
         if ta.action is None or not isinstance(ta.action, ActionSpecial):
             continue
         sp = ta.action
-        if sp.actor_slot != slot or int(sp.special_id) != int(special_id):
+        if not _action_matches_actor(sp, roster_team, slot, pl) or int(sp.special_id) != int(special_id):
             continue
         if int(sp.special_id) == int(SpecialId.ANIMATE_DEAD):
             continue
@@ -615,20 +666,20 @@ def _special_target_cells_for_slot_candidates(
 
 
 def _turns_for_special_slot_candidates(
-    candidates: list[TurnAction], slot: int, special_id: int
+    candidates: list[TurnAction], roster_team: int, slot: int, special_id: int, pl: int
 ) -> list[TurnAction]:
     return [
         ta
         for ta in candidates
         if ta.action is not None
         and isinstance(ta.action, ActionSpecial)
-        and ta.action.actor_slot == slot
+        and _action_matches_actor(ta.action, roster_team, slot, pl)
         and int(ta.action.special_id) == int(special_id)
     ]
 
 
 def _curse_x_options_for_slot_candidates(
-    candidates: list[TurnAction], slot: int, target: tuple[int, int]
+    candidates: list[TurnAction], roster_team: int, slot: int, target: tuple[int, int], pl: int
 ) -> list[int]:
     xs: set[int] = set()
     for ta in candidates:
@@ -637,21 +688,21 @@ def _curse_x_options_for_slot_candidates(
         sp = ta.action
         if int(sp.special_id) != int(SpecialId.CURSE):
             continue
-        if sp.actor_slot != slot or sp.target_square != target or sp.curse_x is None:
+        if not _action_matches_actor(sp, roster_team, slot, pl) or sp.target_square != target or sp.curse_x is None:
             continue
         xs.add(int(sp.curse_x))
     return sorted(xs)
 
 
 def _animate_dead_slots_for_slot_candidates(
-    candidates: list[TurnAction], slot: int
+    candidates: list[TurnAction], roster_team: int, slot: int, pl: int
 ) -> list[int]:
     slots: set[int] = set()
     for ta in candidates:
         if ta.action is None or not isinstance(ta.action, ActionSpecial):
             continue
         sp = ta.action
-        if int(sp.special_id) != int(SpecialId.ANIMATE_DEAD) or sp.actor_slot != slot:
+        if int(sp.special_id) != int(SpecialId.ANIMATE_DEAD) or not _action_matches_actor(sp, roster_team, slot, pl):
             continue
         if sp.animate_dead_crew_slot is not None:
             slots.add(int(sp.animate_dead_crew_slot))
@@ -676,7 +727,8 @@ class MotleyCrewsUI:
         self.play_mode = PlayMode.CPU_CPU
         self.view_mode = ViewMode.TOP_DOWN
         self.game_state: Optional[GameState] = None
-        self.cpu = ScriptedHeuristicPolicy()
+        self.cpu_variant_index: int = default_cpu_variant_index()
+        self.cpu: ParameterizedHeuristicPolicy = policy_for_variant_index(self.cpu_variant_index)
 
         self.legal_list: list[TurnAction] = []
         self.selected_idx: int = 0
@@ -701,11 +753,12 @@ class MotleyCrewsUI:
         # Play phase: board UI (piece menu → move / attack / special → highlights)
         self._play_ui_mode: str = "idle"
         self._play_slot: Optional[int] = None
+        self._play_actor_team: Optional[int] = None  # roster side (0/1); None with _play_slot in action_after_move
         self._play_sp_id: Optional[int] = None
         self._play_menu_items: list[tuple[pygame.Rect, str, Any]] = []
         self._play_popup_anchor: tuple[int, int] = (0, 0)
         self._play_curse_target: Optional[tuple[int, int]] = None
-        self._play_move_drag_slot: Optional[int] = None
+        self._play_move_drag_actor: Optional[tuple[int, int]] = None  # (roster_team, slot)
         self._play_drag_xy: Optional[tuple[int, int]] = None
         self._play_ambiguous: list[TurnAction] = []
         self._play_ambiguous_no_move: bool = False
@@ -713,13 +766,14 @@ class MotleyCrewsUI:
         self._pending_move: Optional[MoveIntent] = None
         self._play_board_preview: Optional[GameState] = None
         self._play_menu_anchor_slot: Optional[int] = None
+        self._play_menu_anchor_team: Optional[int] = None
         self._turn_candidates: list[TurnAction] = []
         self.play_log: list[str] = []
         self.log_scroll: int = 0
         self._log_max_lines = 400
         # (kind, row, col, amount, remaining_ms); kind "dmg" | "heal"
         self._damage_fx: list[tuple[str, int, int, int, float]] = []
-        self._idle_press_slot: Optional[int] = None
+        self._idle_press_actor: Optional[tuple[int, int]] = None  # (roster_team, slot)
         self._idle_press_tick: int = 0
         self._idle_press_pos: Optional[tuple[int, int]] = None
         self._menu_hover_key: Optional[str] = None
@@ -903,8 +957,18 @@ class MotleyCrewsUI:
         self.btn_h_a = pygame.Rect(left, y0 + gap, bw, 40)
         self.btn_h_b = pygame.Rect(left, y0 + gap * 2, bw, 40)
         self.btn_h_h = pygame.Rect(left, y0 + gap * 3, bw, 40)
-        self.btn_view = pygame.Rect(left, y0 + gap * 4 + 24, bw, 36)
-        self.btn_start = pygame.Rect(left, y0 + gap * 5 + 40, min(220, bw), 44)
+        y_cpu = y0 + gap * 4
+        self.btn_cpu_prev = pygame.Rect(left, y_cpu, 40, 34)
+        self.btn_cpu_next = pygame.Rect(left + bw - 40, y_cpu, 40, 34)
+        y_view = y_cpu + 42
+        self.btn_view = pygame.Rect(left, y_view, bw, 36)
+        y_start = y_view + 44
+        self.btn_start = pygame.Rect(left, y_start, min(220, bw), 44)
+
+    def _cycle_cpu_variant(self, delta: int) -> None:
+        n = len(CPU_VARIANTS)
+        self.cpu_variant_index = (self.cpu_variant_index + delta) % n
+        self.cpu = policy_for_variant_index(self.cpu_variant_index)
 
     def _layout_setup_buttons(self) -> None:
         w, h = self.win_w, self.win_h
@@ -941,7 +1005,7 @@ class MotleyCrewsUI:
         self.play_log = []
         self.log_scroll = 0
         self._damage_fx = []
-        self._idle_press_slot = None
+        self._idle_press_actor = None
         self._idle_press_pos = None
 
     def _refresh_legal(self) -> None:
@@ -957,19 +1021,21 @@ class MotleyCrewsUI:
     def _reset_play_interaction(self) -> None:
         self._play_ui_mode = "idle"
         self._play_slot = None
+        self._play_actor_team = None
         self._play_sp_id = None
         self._play_menu_items = []
         self._play_popup_anchor = (0, 0)
         self._play_curse_target = None
-        self._play_move_drag_slot = None
+        self._play_move_drag_actor = None
         self._play_drag_xy = None
         self._play_ambiguous = []
         self._play_ambiguous_no_move = False
         self._pending_move = None
         self._play_board_preview = None
         self._play_menu_anchor_slot = None
+        self._play_menu_anchor_team = None
         self._turn_candidates = []
-        self._idle_press_slot = None
+        self._idle_press_actor = None
         self._idle_press_pos = None
         self._human_anim_ta = None
         self._human_anim_timer = None
@@ -983,21 +1049,21 @@ class MotleyCrewsUI:
             return self._play_board_preview
         return self.game_state
 
-    def _screen_center_for_friendly_slot(self, slot: int) -> Optional[tuple[int, int]]:
+    def _screen_center_for_roster_slot(self, roster_team: int, slot: int) -> Optional[tuple[int, int]]:
         gs = self._state_for_board()
         pl = gs.current_player
-        u = unit_at(gs, pl, slot)
-        if u is None or not u.alive or u.row < 0:
+        u = unit_at(gs, roster_team, slot)
+        if u is None or not u.alive or u.row < 0 or u.controller != pl:
             return None
         if self.view_mode == ViewMode.TOP_DOWN:
             return self._cell_center_top(u.row, u.col, play=True)
         cx, cy = self._cell_center_iso(u.row, u.col, play=True)
         return cx, cy - 4
 
-    def _menu_top_left_near_slot(self, slot: int, menu_pixel_height: int) -> tuple[int, int]:
+    def _menu_top_left_near_slot(self, roster_team: int, slot: int, menu_pixel_height: int) -> tuple[int, int]:
         """Top-left for a vertical menu beside the piece, clamped to the window."""
         w_menu = 240
-        c = self._screen_center_for_friendly_slot(slot)
+        c = self._screen_center_for_roster_slot(roster_team, slot)
         if c is None:
             cx = min(self.sidebar_x - 24, self.win_w // 2)
             return (min(max(8, cx - w_menu // 2), self.win_w - w_menu - 8), 72)
@@ -1012,10 +1078,12 @@ class MotleyCrewsUI:
         """Keep popup menus aligned with the anchored piece (resize / preview move)."""
         if not self._play_menu_items:
             return
-        if self._play_menu_anchor_slot is None:
+        if self._play_menu_anchor_slot is None or self._play_menu_anchor_team is None:
             return
         est_h = sum(r.height for r, _t, _e in self._play_menu_items) + len(self._play_menu_items) * 6
-        new_ax, new_ay = self._menu_top_left_near_slot(self._play_menu_anchor_slot, est_h)
+        new_ax, new_ay = self._menu_top_left_near_slot(
+            self._play_menu_anchor_team, self._play_menu_anchor_slot, est_h
+        )
         old_ax, old_ay = self._play_popup_anchor
         dx, dy = new_ax - old_ax, new_ay - old_ay
         if dx == 0 and dy == 0:
@@ -1076,6 +1144,8 @@ class MotleyCrewsUI:
                     cells.add(ta.resurrect_place)
             return cells, (255, 220, 80, 88)
         slot = self._play_slot
+        rt = self._play_actor_team
+        pl = gs.current_player
         if self._play_ui_mode == "action_after_move" and self.game_state is not None:
             if self._pending_move is not None:
                 return (
@@ -1083,32 +1153,32 @@ class MotleyCrewsUI:
                     HL_ACTION_FIGURE,
                 )
             return empty, HL_MOVE
-        if self._play_ui_mode == "move_pick" and slot is not None:
-            return _move_destinations_for_slot(self.legal_list, slot), HL_MOVE
+        if self._play_ui_mode == "move_pick" and slot is not None and rt is not None:
+            return _move_destinations_for_slot(self.legal_list, rt, slot, pl), HL_MOVE
         if self._play_ui_mode == "basic_pick":
-            if self._pending_move is not None and slot is not None:
+            if self._pending_move is not None and slot is not None and rt is not None:
                 return (
-                    _basic_targets_for_slot_in_candidates(self._turn_candidates, slot),
+                    _basic_targets_for_slot_in_candidates(self._turn_candidates, rt, slot, pl),
                     HL_ATTACK,
                 )
-            if slot is not None:
-                return _basic_targets_for_slot(self.legal_list, slot), HL_ATTACK
+            if slot is not None and rt is not None:
+                return _basic_targets_for_slot(self.legal_list, rt, slot, pl), HL_ATTACK
             return empty, HL_MOVE
         if self._play_ui_mode == "special_pick" and self._play_sp_id is not None:
-            if self._pending_move is not None and slot is not None:
+            if self._pending_move is not None and slot is not None and rt is not None:
                 return (
                     _special_target_cells_for_slot_candidates(
-                        self._turn_candidates, slot, self._play_sp_id
+                        self._turn_candidates, rt, slot, self._play_sp_id, pl
                     ),
                     HL_SPECIAL,
                 )
-            if slot is not None:
+            if slot is not None and rt is not None:
                 return (
-                    _special_target_cells(self.legal_list, slot, self._play_sp_id),
+                    _special_target_cells(self.legal_list, rt, slot, self._play_sp_id, pl),
                     HL_SPECIAL,
                 )
             return empty, HL_MOVE
-        if slot is None:
+        if slot is None or rt is None:
             return empty, HL_MOVE
         return empty, HL_MOVE
 
@@ -1132,30 +1202,34 @@ class MotleyCrewsUI:
             return spec.board_override
         return self._state_for_board()
 
-    def _open_piece_menu(self, slot: int) -> None:
+    def _open_piece_menu(self, roster_team: int, slot: int) -> None:
         legal = self.legal_list
+        assert self.game_state is not None
+        pl = self.game_state.current_player
         h, w, gap = 28, 220, 3
         nrows = (
-            (1 if _move_destinations_for_slot(legal, slot) else 0)
-            + (1 if _basic_targets_for_slot(legal, slot) else 0)
-            + (1 if _special_ids_for_slot(legal, slot) else 0)
+            (1 if _move_destinations_for_slot(legal, roster_team, slot, pl) else 0)
+            + (1 if _basic_targets_for_slot(legal, roster_team, slot, pl) else 0)
+            + (1 if _special_ids_for_slot(legal, roster_team, slot, pl) else 0)
             + 1
         )
         est_h = nrows * (h + gap) + 8
-        x, y = self._menu_top_left_near_slot(slot, est_h)
+        x, y = self._menu_top_left_near_slot(roster_team, slot, est_h)
         self._play_popup_anchor = (x, y)
         self._play_menu_anchor_slot = slot
+        self._play_menu_anchor_team = roster_team
         self._play_slot = slot
+        self._play_actor_team = roster_team
         self._play_ui_mode = "piece_menu"
         yy = y
         items: list[tuple[pygame.Rect, str, Any]] = []
-        if _move_destinations_for_slot(legal, slot):
+        if _move_destinations_for_slot(legal, roster_team, slot, pl):
             items.append((pygame.Rect(x, yy, w, h), "move", None))
             yy += h + gap
-        if _basic_targets_for_slot(legal, slot):
+        if _basic_targets_for_slot(legal, roster_team, slot, pl):
             items.append((pygame.Rect(x, yy, w, h), "basic", None))
             yy += h + gap
-        if _special_ids_for_slot(legal, slot):
+        if _special_ids_for_slot(legal, roster_team, slot, pl):
             items.append((pygame.Rect(x, yy, w, h), "special_menu", None))
             yy += h + gap
         items.append((pygame.Rect(x, yy, w, h), "cancel", None))
@@ -1165,33 +1239,39 @@ class MotleyCrewsUI:
         """Move destination is fixed; user picks which figure acts (or passes) as separate steps."""
         self._play_ui_mode = "action_after_move"
         self._play_slot = None
+        self._play_actor_team = None
         self._play_sp_id = None
         self._play_menu_items = []
         self._play_menu_anchor_slot = None
+        self._play_menu_anchor_team = None
         self._play_curse_target = None
         self._play_ambiguous = []
 
-    def _open_action_piece_menu(self, slot: int) -> None:
+    def _open_action_piece_menu(self, roster_team: int, slot: int) -> None:
         """Action sub-step only: basic / special for this figure (after a move is already chosen)."""
+        assert self.game_state is not None
+        pl = self.game_state.current_player
         c = self._turn_candidates
         h, w, gap = 28, 220, 3
         nrows = (
-            (1 if _basic_targets_for_slot_in_candidates(c, slot) else 0)
-            + (1 if _special_ids_for_slot_candidates(c, slot) else 0)
+            (1 if _basic_targets_for_slot_in_candidates(c, roster_team, slot, pl) else 0)
+            + (1 if _special_ids_for_slot_candidates(c, roster_team, slot, pl) else 0)
             + 1
         )
         est_h = nrows * (h + gap) + 8
-        x, y = self._menu_top_left_near_slot(slot, est_h)
+        x, y = self._menu_top_left_near_slot(roster_team, slot, est_h)
         self._play_popup_anchor = (x, y)
         self._play_menu_anchor_slot = slot
+        self._play_menu_anchor_team = roster_team
         self._play_slot = slot
+        self._play_actor_team = roster_team
         self._play_ui_mode = "action_piece_menu"
         yy = y
         items: list[tuple[pygame.Rect, str, Any]] = []
-        if _basic_targets_for_slot_in_candidates(c, slot):
+        if _basic_targets_for_slot_in_candidates(c, roster_team, slot, pl):
             items.append((pygame.Rect(x, yy, w, h), "basic", None))
             yy += h + gap
-        if _special_ids_for_slot_candidates(c, slot):
+        if _special_ids_for_slot_candidates(c, roster_team, slot, pl):
             items.append((pygame.Rect(x, yy, w, h), "special_menu", None))
             yy += h + gap
         items.append((pygame.Rect(x, yy, w, h), "cancel", None))
@@ -1208,8 +1288,11 @@ class MotleyCrewsUI:
         self._enter_action_phase_after_move()
 
     def _open_special_submenu(self) -> None:
-        assert self._play_slot is not None
+        assert self._play_slot is not None and self._play_actor_team is not None
+        assert self.game_state is not None
+        pl = self.game_state.current_player
         slot = self._play_slot
+        rt = self._play_actor_team
         x, y = self._play_popup_anchor
         h, w, gap = 26, 240, 2
         yy = y
@@ -1217,24 +1300,29 @@ class MotleyCrewsUI:
         items.append((pygame.Rect(x, yy, w, h), "back", None))
         yy += h + gap
         spec_ids = (
-            _special_ids_for_slot_candidates(self._turn_candidates, slot)
+            _special_ids_for_slot_candidates(self._turn_candidates, rt, slot, pl)
             if self._pending_move is not None
-            else _special_ids_for_slot(self.legal_list, slot)
+            else _special_ids_for_slot(self.legal_list, rt, slot, pl)
         )
         for sid in spec_ids:
             items.append((pygame.Rect(x, yy, w, h), f"special_pick:{sid}", None))
             yy += h + gap
         self._play_menu_items = items
         self._play_menu_anchor_slot = slot
+        self._play_menu_anchor_team = rt
         self._play_ui_mode = "special_submenu"
 
     def _open_curse_x_menu(self, target: tuple[int, int]) -> None:
-        assert self._play_slot is not None
+        assert self._play_slot is not None and self._play_actor_team is not None
+        assert self.game_state is not None
+        pl = self.game_state.current_player
         self._play_curse_target = target
+        rt = self._play_actor_team
+        slot = self._play_slot
         opts = (
-            _curse_x_options_for_slot_candidates(self._turn_candidates, self._play_slot, target)
+            _curse_x_options_for_slot_candidates(self._turn_candidates, rt, slot, target, pl)
             if self._pending_move is not None
-            else _curse_x_options(self.legal_list, self._play_slot, target)
+            else _curse_x_options(self.legal_list, rt, slot, target, pl)
         )
         x, y = self._play_popup_anchor
         h, w, gap = 26, 200, 2
@@ -1248,12 +1336,15 @@ class MotleyCrewsUI:
         self._play_ui_mode = "curse_pick"
 
     def _open_anim_dead_menu(self) -> None:
-        assert self._play_slot is not None
+        assert self._play_slot is not None and self._play_actor_team is not None
+        assert self.game_state is not None
+        pl = self.game_state.current_player
         slot = self._play_slot
+        rt = self._play_actor_team
         slots = (
-            _animate_dead_slots_for_slot_candidates(self._turn_candidates, slot)
+            _animate_dead_slots_for_slot_candidates(self._turn_candidates, rt, slot, pl)
             if self._pending_move is not None
-            else _animate_dead_slots(self.legal_list, slot)
+            else _animate_dead_slots(self.legal_list, rt, slot, pl)
         )
         x, y = self._play_popup_anchor
         h, w, gap = 26, 240, 2
@@ -1271,13 +1362,15 @@ class MotleyCrewsUI:
         self._play_ambiguous_no_move = _ambiguous_all_no_move(candidates)
         n = min(14, len(candidates)) + 1
         est_h = n * 24 + (72 if self._play_ambiguous_no_move else 48)
-        if self._play_slot is not None:
-            x, y = self._menu_top_left_near_slot(self._play_slot, est_h)
+        if self._play_slot is not None and self._play_actor_team is not None:
+            x, y = self._menu_top_left_near_slot(self._play_actor_team, self._play_slot, est_h)
             self._play_popup_anchor = (x, y)
             self._play_menu_anchor_slot = self._play_slot
+            self._play_menu_anchor_team = self._play_actor_team
         else:
             x, y = self._play_popup_anchor
             self._play_menu_anchor_slot = None
+            self._play_menu_anchor_team = None
         h, w, gap = 22, 480, 2
         yy = y + (62 if self._play_ambiguous_no_move else 40)
         items: list[tuple[pygame.Rect, str, Any]] = []
@@ -1325,14 +1418,14 @@ class MotleyCrewsUI:
             if not rect.collidepoint(mx, my):
                 continue
             if tag == "cancel" or tag == "back":
-                if tag == "back" and self._play_slot is not None:
+                if tag == "back" and self._play_slot is not None and self._play_actor_team is not None:
                     if self._pending_move is not None:
                         if self._play_ui_mode == "special_submenu":
-                            self._open_action_piece_menu(self._play_slot)
+                            self._open_action_piece_menu(self._play_actor_team, self._play_slot)
                         else:
                             self._enter_action_phase_after_move()
                     else:
-                        self._open_piece_menu(self._play_slot)
+                        self._open_piece_menu(self._play_actor_team, self._play_slot)
                     return True
                 if tag == "cancel" and self._pending_move is not None and self._play_ui_mode == "action_piece_menu":
                     self._enter_action_phase_after_move()
@@ -1351,21 +1444,25 @@ class MotleyCrewsUI:
                 self._open_special_submenu()
                 return True
             if tag.startswith("special_pick:"):
+                assert self.game_state is not None
+                pl = self.game_state.current_player
                 sid = int(tag.split(":")[1])
                 self._play_sp_id = sid
-                slot = self._play_slot or 0
+                assert self._play_slot is not None and self._play_actor_team is not None
+                slot = self._play_slot
+                rt = self._play_actor_team
                 use_c = self._pending_move is not None
                 if sid == int(SpecialId.ANIMATE_DEAD):
                     ads = (
-                        _animate_dead_slots_for_slot_candidates(self._turn_candidates, slot)
+                        _animate_dead_slots_for_slot_candidates(self._turn_candidates, rt, slot, pl)
                         if use_c
-                        else _animate_dead_slots(self.legal_list, slot)
+                        else _animate_dead_slots(self.legal_list, rt, slot, pl)
                     )
                     if len(ads) == 1:
                         menu_turns = (
-                            _turns_for_special_slot_candidates(self._turn_candidates, slot, sid)
+                            _turns_for_special_slot_candidates(self._turn_candidates, rt, slot, sid, pl)
                             if use_c
-                            else _turns_for_special_menu(self.legal_list, slot, sid)
+                            else _turns_for_special_menu(self.legal_list, rt, slot, sid, pl)
                         )
                         cand = [
                             ta
@@ -1379,9 +1476,9 @@ class MotleyCrewsUI:
                         self._open_anim_dead_menu()
                     return True
                 cells = (
-                    _special_target_cells_for_slot_candidates(self._turn_candidates, slot, sid)
+                    _special_target_cells_for_slot_candidates(self._turn_candidates, rt, slot, sid, pl)
                     if use_c
-                    else _special_target_cells(self.legal_list, slot, sid)
+                    else _special_target_cells(self.legal_list, rt, slot, sid, pl)
                 )
                 if not cells:
                     return True
@@ -1389,6 +1486,8 @@ class MotleyCrewsUI:
                 self._play_menu_items = []
                 return True
             if tag.startswith("curse_x:"):
+                assert self.game_state is not None
+                pl = self.game_state.current_player
                 xval = int(tag.split(":")[1])
                 assert self._play_curse_target is not None
                 pool = (
@@ -1405,22 +1504,32 @@ class MotleyCrewsUI:
                     and ta.action.target_square == self._play_curse_target
                     and ta.action.curse_x == xval
                 ]
-                assert self._play_slot is not None
-                cand = [ta for ta in cand if ta.action is not None and ta.action.actor_slot == self._play_slot]
+                assert self._play_slot is not None and self._play_actor_team is not None
+                rt = self._play_actor_team
+                sl = self._play_slot
+                cand = [
+                    ta
+                    for ta in cand
+                    if ta.action is not None and _action_matches_actor(ta.action, rt, sl, pl)
+                ]
                 self._resolve_or_commit(cand)
                 return True
             if tag.startswith("anim_dead:"):
+                assert self.game_state is not None
+                pl_ad = self.game_state.current_player
                 ds = int(tag.split(":")[1])
-                slot_ad = self._play_slot or 0
+                assert self._play_slot is not None and self._play_actor_team is not None
+                slot_ad = self._play_slot
+                rt_ad = self._play_actor_team
                 cand = [
                     ta
                     for ta in (
                         _turns_for_special_slot_candidates(
-                            self._turn_candidates, slot_ad, int(SpecialId.ANIMATE_DEAD)
+                            self._turn_candidates, rt_ad, slot_ad, int(SpecialId.ANIMATE_DEAD), pl_ad
                         )
                         if self._pending_move is not None
                         else _turns_for_special_menu(
-                            self.legal_list, slot_ad, int(SpecialId.ANIMATE_DEAD)
+                            self.legal_list, rt_ad, slot_ad, int(SpecialId.ANIMATE_DEAD), pl_ad
                         )
                     )
                     if ta.action is not None
@@ -1457,72 +1566,88 @@ class MotleyCrewsUI:
         r, c = cell
         gs_board = self._state_for_board()
 
+        pl = gs.current_player
         if self._play_ui_mode in ("idle", "action_after_move"):
-            slot = _actor_slot_at_cell(gs_board, r, c)
-            if slot is None:
+            ts = _actor_team_slot_at_cell(gs_board, r, c)
+            if ts is None:
                 return False
+            roster_team, slot = ts
             if self._pending_move is not None:
-                if not _slot_can_act_after_move(self._turn_candidates, slot):
+                if not _slot_can_act_after_move(self._turn_candidates, roster_team, slot, pl):
                     return False
-                self._open_action_piece_menu(slot)
+                self._open_action_piece_menu(roster_team, slot)
                 return True
             if self._play_ui_mode == "idle":
-                self._open_piece_menu(slot)
+                self._open_piece_menu(roster_team, slot)
                 return True
             return False
 
-        if self._play_ui_mode == "move_pick" and self._play_slot is not None:
+        if (
+            self._play_ui_mode == "move_pick"
+            and self._play_slot is not None
+            and self._play_actor_team is not None
+        ):
             dest = (r, c)
-            if dest not in _move_destinations_for_slot(legal, self._play_slot):
+            rt = self._play_actor_team
+            sl = self._play_slot
+            if dest not in _move_destinations_for_slot(legal, rt, sl, pl):
                 return False
-            cand = _turns_for_move_dest(legal, self._play_slot, dest)
+            cand = _turns_for_move_dest(legal, rt, sl, dest, pl)
             self._queue_move_pick_animation(cand)
             return True
 
         if self._play_ui_mode == "basic_pick":
             tgt = (r, c)
+            rt = self._play_actor_team
+            sl = self._play_slot
             if self._pending_move is not None:
-                if self._play_slot is None:
+                if sl is None or rt is None:
                     return False
-                if tgt not in _basic_targets_for_slot_in_candidates(self._turn_candidates, self._play_slot):
+                if tgt not in _basic_targets_for_slot_in_candidates(self._turn_candidates, rt, sl, pl):
                     return False
                 cand = [
                     ta
                     for ta in self._turn_candidates
                     if ta.action is not None
                     and isinstance(ta.action, ActionBasicAttack)
-                    and ta.action.actor_slot == self._play_slot
+                    and _action_matches_actor(ta.action, rt, sl, pl)
                     and ta.action.target_square == tgt
                 ]
                 self._resolve_or_commit(cand)
                 return True
-            if self._play_slot is None:
+            if sl is None or rt is None:
                 return False
-            if tgt not in _basic_targets_for_slot(legal, self._play_slot):
+            if tgt not in _basic_targets_for_slot(legal, rt, sl, pl):
                 return False
-            cand = _turns_for_basic_target(legal, self._play_slot, tgt)
+            cand = _turns_for_basic_target(legal, rt, sl, tgt, pl)
             self._resolve_or_commit(cand)
             return True
 
-        if self._play_ui_mode == "special_pick" and self._play_slot is not None and self._play_sp_id is not None:
+        if (
+            self._play_ui_mode == "special_pick"
+            and self._play_slot is not None
+            and self._play_actor_team is not None
+            and self._play_sp_id is not None
+        ):
             tgt = (r, c)
             use_c = self._pending_move is not None
             slot = self._play_slot
+            rt = self._play_actor_team
             allowed = (
                 _special_target_cells_for_slot_candidates(
-                    self._turn_candidates, slot, self._play_sp_id
+                    self._turn_candidates, rt, slot, self._play_sp_id, pl
                 )
                 if use_c
-                else _special_target_cells(legal, slot, self._play_sp_id)
+                else _special_target_cells(legal, rt, slot, self._play_sp_id, pl)
             )
             if int(self._play_sp_id) == int(SpecialId.ANIMATE_DEAD):
                 return False
             if tgt not in allowed:
                 return False
             menu_turns = (
-                _turns_for_special_slot_candidates(self._turn_candidates, slot, self._play_sp_id)
+                _turns_for_special_slot_candidates(self._turn_candidates, rt, slot, self._play_sp_id, pl)
                 if use_c
-                else _turns_for_special_menu(legal, slot, self._play_sp_id)
+                else _turns_for_special_menu(legal, rt, slot, self._play_sp_id, pl)
             )
             cand = [
                 ta
@@ -1533,9 +1658,9 @@ class MotleyCrewsUI:
             ]
             if int(self._play_sp_id) == int(SpecialId.CURSE):
                 xs = (
-                    _curse_x_options_for_slot_candidates(self._turn_candidates, slot, tgt)
+                    _curse_x_options_for_slot_candidates(self._turn_candidates, rt, slot, tgt, pl)
                     if use_c
-                    else _curse_x_options(legal, slot, tgt)
+                    else _curse_x_options(legal, rt, slot, tgt, pl)
                 )
                 if len(xs) > 1:
                     self._open_curse_x_menu(tgt)
@@ -1622,7 +1747,7 @@ class MotleyCrewsUI:
         opts = legal_setup_actions(self.game_state)
         if not opts:
             return
-        pl = self.rng_cpu.choice(opts)
+        pl = self.cpu.choose_setup(self.game_state, opts, self.rng_cpu)
         self.game_state = setup_step(self.game_state, pl).state
         self.cpu_timer = 0
         if self.game_state.match_phase == int(MatchPhase.PLAY):
@@ -1709,17 +1834,19 @@ class MotleyCrewsUI:
 
             if (
                 self.phase == "play"
-                and self._idle_press_slot is not None
+                and self._idle_press_actor is not None
                 and self._play_ui_mode == "idle"
                 and self.game_state
                 and self._is_human_turn()
             ):
                 if pygame.time.get_ticks() - self._idle_press_tick >= PLAY_HOLD_MS:
-                    sl = self._idle_press_slot
-                    if _move_destinations_for_slot(self.legal_list, sl):
+                    rt, sl = self._idle_press_actor
+                    pl_h = self.game_state.current_player
+                    if _move_destinations_for_slot(self.legal_list, rt, sl, pl_h):
                         self._play_slot = sl
+                        self._play_actor_team = rt
                         self._play_ui_mode = "move_pick"
-                        self._idle_press_slot = None
+                        self._idle_press_actor = None
                         self._idle_press_pos = None
 
             if self.phase == "setup_place" and self.game_state and self.game_state.match_phase == int(
@@ -1770,6 +1897,8 @@ class MotleyCrewsUI:
             self._play_show_fallback_list = not self._play_show_fallback_list
         elif key == pygame.K_v and self.phase == "play":
             self.view_mode = ViewMode.ISOMETRIC if self.view_mode == ViewMode.TOP_DOWN else ViewMode.TOP_DOWN
+        elif self.phase == "menu" and key in (pygame.K_LEFTBRACKET, pygame.K_RIGHTBRACKET):
+            self._cycle_cpu_variant(-1 if key == pygame.K_LEFTBRACKET else 1)
         elif (
             self.phase == "play"
             and self._is_human_turn()
@@ -1798,6 +1927,10 @@ class MotleyCrewsUI:
             elif self.btn_h_h.collidepoint(mx, my):
                 self.play_mode = PlayMode.HUMAN_HUMAN
                 self._menu_sticky_key = "hh"
+            elif self.btn_cpu_prev.collidepoint(mx, my):
+                self._cycle_cpu_variant(-1)
+            elif self.btn_cpu_next.collidepoint(mx, my):
+                self._cycle_cpu_variant(1)
             elif self.btn_view.collidepoint(mx, my):
                 self.view_mode = ViewMode.ISOMETRIC if self.view_mode == ViewMode.TOP_DOWN else ViewMode.TOP_DOWN
                 self._menu_sticky_key = "view"
@@ -1889,9 +2022,9 @@ class MotleyCrewsUI:
             ):
                 cell = self._screen_to_cell(pos)
                 if cell is not None:
-                    slot = _actor_slot_at_cell(self.game_state, cell[0], cell[1])
-                    if slot is not None:
-                        self._idle_press_slot = slot
+                    ts = _actor_team_slot_at_cell(self.game_state, cell[0], cell[1])
+                    if ts is not None:
+                        self._idle_press_actor = ts
                         self._idle_press_tick = pygame.time.get_ticks()
                         self._idle_press_pos = (mx, my)
                         return
@@ -1900,13 +2033,15 @@ class MotleyCrewsUI:
             if (
                 self._play_ui_mode == "move_pick"
                 and self._play_slot is not None
+                and self._play_actor_team is not None
                 and self.game_state
             ):
                 cell = self._screen_to_cell(pos)
                 if cell:
                     sr, sc = cell
-                    if _actor_slot_at_cell(self.game_state, sr, sc) == self._play_slot:
-                        self._play_move_drag_slot = self._play_slot
+                    ts = _actor_team_slot_at_cell(self.game_state, sr, sc)
+                    if ts == (self._play_actor_team, self._play_slot):
+                        self._play_move_drag_actor = ts
                         self._play_drag_xy = (mx, my)
             return
 
@@ -1919,6 +2054,8 @@ class MotleyCrewsUI:
                 ("ha", self.btn_h_a),
                 ("hb", self.btn_h_b),
                 ("hh", self.btn_h_h),
+                ("cpu_prev", self.btn_cpu_prev),
+                ("cpu_next", self.btn_cpu_next),
                 ("view", self.btn_view),
                 ("start", self.btn_start),
             ):
@@ -1927,26 +2064,25 @@ class MotleyCrewsUI:
                     break
         if self._drag is not None:
             self._drag_pos = pos
-        elif self.phase == "play" and self._play_move_drag_slot is not None:
+        elif self.phase == "play" and self._play_move_drag_actor is not None:
             self._play_drag_xy = pos
         elif (
             self.phase == "play"
-            and self._idle_press_slot is not None
+            and self._idle_press_actor is not None
             and self._play_ui_mode == "idle"
             and self._idle_press_pos is not None
         ):
             mx, my = pos
             if abs(mx - self._idle_press_pos[0]) + abs(my - self._idle_press_pos[1]) > 8:
-                sl = self._idle_press_slot
-                if (
-                    self.game_state
-                    and self._is_human_turn()
-                    and _move_destinations_for_slot(self.legal_list, sl)
-                ):
-                    self._play_slot = sl
-                    self._play_ui_mode = "move_pick"
-                    self._idle_press_slot = None
-                    self._idle_press_pos = None
+                rt, sl = self._idle_press_actor
+                if self.game_state and self._is_human_turn():
+                    pl_m = self.game_state.current_player
+                    if _move_destinations_for_slot(self.legal_list, rt, sl, pl_m):
+                        self._play_slot = sl
+                        self._play_actor_team = rt
+                        self._play_ui_mode = "move_pick"
+                        self._idle_press_actor = None
+                        self._idle_press_pos = None
 
     def _on_mouse_up(self, pos: tuple[int, int], button: int) -> None:
         if button != 1:
@@ -1963,19 +2099,28 @@ class MotleyCrewsUI:
             if cell is not None:
                 self._try_setup_placement(team, slot, cell)
             return
-        if self.phase == "play" and self._play_move_drag_slot is not None:
+        if self.phase == "play" and self._play_move_drag_actor is not None:
             gs = self.game_state
-            if gs and self._play_ui_mode == "move_pick" and self._play_slot is not None:
+            if (
+                gs
+                and self._play_ui_mode == "move_pick"
+                and self._play_slot is not None
+                and self._play_actor_team is not None
+            ):
+                pl_u = gs.current_player
+                rt = self._play_actor_team
+                sl = self._play_slot
                 cell = self._screen_to_cell(pos)
-                if cell and cell in _move_destinations_for_slot(self.legal_list, self._play_slot):
-                    cand = _turns_for_move_dest(self.legal_list, self._play_slot, cell)
+                if cell and cell in _move_destinations_for_slot(self.legal_list, rt, sl, pl_u):
+                    cand = _turns_for_move_dest(self.legal_list, rt, sl, cell, pl_u)
                     self._queue_move_pick_animation(cand)
-            self._play_move_drag_slot = None
+            self._play_move_drag_actor = None
             self._play_drag_xy = None
-        if self.phase == "play" and self._idle_press_slot is not None:
+        if self.phase == "play" and self._idle_press_actor is not None:
             if self._play_ui_mode == "idle":
-                self._open_piece_menu(self._idle_press_slot)
-            self._idle_press_slot = None
+                rt, sl = self._idle_press_actor
+                self._open_piece_menu(rt, sl)
+            self._idle_press_actor = None
             self._idle_press_pos = None
 
     @staticmethod
@@ -2151,6 +2296,32 @@ class MotleyCrewsUI:
             if emphasize:
                 pygame.draw.rect(self.screen, (160, 185, 240), rect, 2, border_radius=6)
             self.screen.blit(self.font.render(text, True, (230, 230, 235)), (rect.x + 12, rect.y + 10))
+        self.screen.blit(
+            self.font_small.render(
+                "CPU AI style — enemy in vs-CPU; both use this style in CPU vs CPU",
+                True,
+                (150, 155, 170),
+            ),
+            (self.btn_cpu_prev.x, self.btn_cpu_prev.y - 18),
+        )
+        for key, rect, sym in (
+            ("cpu_prev", self.btn_cpu_prev, "<"),
+            ("cpu_next", self.btn_cpu_next, ">"),
+        ):
+            hover = self._menu_hover_key == key
+            bg = (88, 92, 110) if hover else (68, 72, 86)
+            pygame.draw.rect(self.screen, bg, rect, border_radius=4)
+            if hover:
+                pygame.draw.rect(self.screen, (140, 165, 210), rect, 2, border_radius=4)
+            sym_s = self.font.render(sym, True, (230, 230, 235))
+            self.screen.blit(sym_s, (rect.centerx - sym_s.get_width() // 2, rect.centery - sym_s.get_height() // 2))
+        cv = CPU_VARIANTS[self.cpu_variant_index]
+        mid_x = self.btn_cpu_prev.right + 8
+        mid_y = self.btn_cpu_prev.y + 5
+        line = f"{cv.difficulty.capitalize()}: {cv.key}"
+        if len(line) > 46:
+            line = line[:43] + "…"
+        self.screen.blit(self.font_small.render(line, True, (210, 214, 225)), (mid_x, mid_y))
         vm = "Isometric" if self.view_mode == ViewMode.ISOMETRIC else "Top-down"
         vkey = "view"
         vhover = self._menu_hover_key == vkey
@@ -2168,7 +2339,8 @@ class MotleyCrewsUI:
             pygame.draw.rect(self.screen, (200, 215, 255), self.btn_start, 2, border_radius=6)
         self.screen.blit(self.font.render("Start", True, (255, 255, 255)), (self.btn_start.x + 72, self.btn_start.y + 12))
         hint = self.font_small.render(
-            "Human modes: coin toss → setup choice → drag crew onto zones. In-game: V toggles view. Esc = menu.",
+            "Human modes: coin toss → setup choice → drag crew onto zones. In-game: V toggles view. "
+            "Menu: [ ] cycle CPU style. Esc = menu.",
             True,
             (160, 165, 180),
         )
@@ -2392,8 +2564,12 @@ class MotleyCrewsUI:
                     (self.board_ox, hy),
                 )
 
-        if self._is_human_turn() and self._play_slot is not None:
-            u = unit_at(gs_board, gs.current_player, self._play_slot)
+        if (
+            self._is_human_turn()
+            and self._play_slot is not None
+            and self._play_actor_team is not None
+        ):
+            u = unit_at(gs_board, self._play_actor_team, self._play_slot)
             if u is not None and u.alive:
                 if self.view_mode == ViewMode.TOP_DOWN:
                     cx, cy = self._cell_center_top(u.row, u.col, play=True)
@@ -2407,15 +2583,16 @@ class MotleyCrewsUI:
         if (
             self._is_human_turn()
             and self._play_drag_xy is not None
-            and self._play_move_drag_slot is not None
+            and self._play_move_drag_actor is not None
         ):
-            u = unit_at(gs, gs.current_player, self._play_move_drag_slot)
+            drt, dsl = self._play_move_drag_actor
+            u = unit_at(gs, drt, dsl)
             if u is not None:
                 self._blit_token_top(
                     self._play_drag_xy[0],
                     self._play_drag_xy[1],
                     u.class_id,
-                    gs.current_player,
+                    drt,
                     radius=max(12, self._token_r_top - 2),
                     view=self.view_mode,
                 )

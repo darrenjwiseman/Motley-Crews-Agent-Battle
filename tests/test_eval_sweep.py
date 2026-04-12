@@ -12,11 +12,38 @@ import pytest
 from motley_crews_play.eval_sweep import (
     BatchSweepAborted,
     SweepConfigError,
+    _games_done_from_shard_log,
     load_variants,
     run_from_toml,
     run_sweep_batch,
     variant_results_from_csv,
 )
+
+
+def test_games_done_from_shard_log_parallel() -> None:
+    log = """
+  [sweep:a] games 4/16  vs_heur 1W/3L  vs_rand 2W/2L
+  [sweep:b] games 8/16  vs_heur 2W/6L  vs_rand 4W/4L
+  [sweep:a] games 10/16  vs_heur 3W/7L  vs_rand 5W/5L
+"""
+    # Last per label: a=10, b=8 → 18; cap 32 = 2 variants × 16 games/var
+    g = _games_done_from_shard_log(log, n_variants=2, games_per_variant=16)
+    assert g == 18
+
+
+def test_games_done_from_shard_log_sequential() -> None:
+    log = """
+  [###-----------------------------] 5/32  a  vs_heur 1W/4L  vs_rand 0W/5L
+  [####----------------------------] 8/32  a  vs_heur 2W/6L  vs_rand 1W/7L
+"""
+    g = _games_done_from_shard_log(log, n_variants=2, games_per_variant=16)
+    assert g == 8
+
+
+def test_games_done_from_shard_log_clamps() -> None:
+    log = "  [sweep:x] games 999/16  vs_heur 0W/0L  vs_rand 0W/0L\n"
+    g = _games_done_from_shard_log(log, n_variants=1, games_per_variant=16)
+    assert g == 16
 
 
 def test_load_variants() -> None:

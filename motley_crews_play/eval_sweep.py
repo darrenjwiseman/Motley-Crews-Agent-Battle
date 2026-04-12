@@ -15,9 +15,11 @@ import argparse
 import copy
 import csv
 import os
+import re
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import tomllib
 import tomli_w
@@ -340,6 +342,46 @@ def _progress_bar(done: int, total: int, width: int = 36) -> str:
     filled = int(round(width * done / total))
     filled = min(max(filled, 0), width)
     return "[" + "#" * filled + "-" * (width - filled) + f"] {done}/{total}"
+
+
+# Batch supervisor: poll shard logs at most this often (within 30–60s UX window).
+BATCH_SUPERVISOR_POLL_INTERVAL_S = 45.0
+
+_RE_SWEEP_PARALLEL = re.compile(r"\[sweep:([^\]]+)\] games (\d+)/(\d+)")
+_RE_SWEEP_SEQUENTIAL = re.compile(r"^\s*\[[#\-]+\]\s+(\d+)/(\d+)\s+\S+\s+vs_heur")
+
+
+def _games_done_from_shard_log(
+    text: str,
+    *,
+    n_variants: int,
+    games_per_variant: int,
+) -> int:
+    """
+    Estimate completed games in one shard subprocess from its log (stdout).
+
+    Parallel pool lines: ``[sweep:label] games gi/g_in_v``. Sequential lines:
+    ``[###] global/total  label  vs_heur ...`` (non-tty / log file mode).
+    """
+    games_per_shard = n_variants * games_per_variant
+    if games_per_shard <= 0:
+        return 0
+    if "[sweep:" in text:
+        last_by_label: dict[str, int] = {}
+        for raw in text.splitlines():
+            line = raw.replace("\r", "")
+            m = _RE_SWEEP_PARALLEL.search(line)
+            if m:
+                last_by_label[m.group(1)] = int(m.group(2))
+        out = sum(last_by_label.values())
+    else:
+        out = 0
+        for raw in text.splitlines():
+            line = raw.replace("\r", "")
+            m = _RE_SWEEP_SEQUENTIAL.match(line)
+            if m:
+                out = max(out, int(m.group(1)))
+    return min(max(out, 0), games_per_shard)
 
 
 def _is_tty(stream: Any) -> bool:
@@ -949,30 +991,65 @@ def _batch_calibration_per_shard_estimates(
     return est, eta_wall
 
 
-def _emit_batch_supervisor_progress(
+def _emit_batch_supervisor_progress_block(
     prog: Any,
     *,
-    games_done: int,
+    aggregate_done: int,
     total_games: int,
     elapsed_s: float,
     eta_wall: float | None,
     tty: bool,
+    shard_done: list[int],
+    shard_total: list[int],
+    est_per_shard: list[float | None],
+    n_shards: int,
+    tty_state: dict[str, bool],
 ) -> None:
+    """
+    Aggregate line plus one indented line per shard (same bar / counts / % / remaining pattern).
+    On TTY, redraws a block of ``1 + n_shards`` lines using cursor-up so scrollback stays clean.
+    """
     if total_games <= 0:
         return
-    bar = _progress_bar(games_done, total_games)
-    pct = 100.0 * float(games_done) / float(total_games)
-    extra = ""
+    lines: list[str] = []
+    bar = _progress_bar(aggregate_done, total_games)
+    pct = 100.0 * float(aggregate_done) / float(total_games)
+    extra_agg = ""
     if eta_wall is not None and elapsed_s >= 0:
         rem = max(0.0, eta_wall - elapsed_s)
-        extra = f"  ~{rem:.0f}s remaining (rough; parallel shards)"
-    line = f"  {bar}  {games_done}/{total_games} games  ({pct:.0f}%){extra}"
+        extra_agg = f"  ~{rem:.0f}s remaining (rough; parallel shards)"
+    lines.append(
+        f"  {bar}  {aggregate_done}/{total_games} games  ({pct:.0f}%){extra_agg}"
+    )
+    for i in range(n_shards):
+        st = shard_total[i] if i < len(shard_total) else 0
+        sd = shard_done[i] if i < len(shard_done) else 0
+        est_i = est_per_shard[i] if i < len(est_per_shard) else None
+        if st > 0:
+            bar_s = _progress_bar(sd, st)
+            pct_s = 100.0 * float(sd) / float(st)
+        else:
+            bar_s = "[?]"
+            pct_s = 0.0
+        extra_s = ""
+        if est_i is not None and st > 0:
+            rem_s = max(0.0, est_i * (1.0 - float(sd) / float(st)))
+            extra_s = f"  ~{rem_s:.0f}s remaining (rough; shard)"
+        lines.append(
+            f"    shard {i + 1}/{n_shards}: {bar_s}  {sd}/{st} games  ({pct_s:.0f}%){extra_s}"
+        )
+    n_lines = len(lines)
     if tty:
-        pad = max(0, 140 - len(line))
-        prog.write("\r" + line + " " * pad)
+        # ANSI: move cursor up to block start, rewrite each line, clear to EOL (no scrollback spam).
+        if tty_state.get("block_started"):
+            prog.write(f"\033[{n_lines}A")
+        for line in lines:
+            prog.write("\r" + line + "\033[K\n")
+        tty_state["block_started"] = True
         prog.flush()
     else:
-        prog.write(line + "\n")
+        for line in lines:
+            prog.write(line + "\n")
         prog.flush()
 
 
@@ -1025,7 +1102,7 @@ def run_sweep_batch(
         flush=True,
     )
 
-    _, eta_wall = _batch_calibration_per_shard_estimates(
+    est_per_shard, eta_wall = _batch_calibration_per_shard_estimates(
         toml,
         chunks,
         csv_path=csv_path,
@@ -1111,16 +1188,57 @@ def run_sweep_batch(
     print("", file=prog, flush=True)
     print(f"Starting {n_shards} shard subprocess(es)…", file=prog, flush=True)
     t_batch = time.perf_counter()
-    games_done = 0
-    if tty_prog:
-        _emit_batch_supervisor_progress(
-            prog,
-            games_done=games_done,
-            total_games=total_games,
-            elapsed_s=0.0,
-            eta_wall=eta_wall,
-            tty=True,
+    est_list = [est_per_shard[i] if i < len(est_per_shard) else None for i in range(n_shards)]
+
+    tty_block_state: dict[str, bool] = {"block_started": False}
+    emit_lock = threading.Lock()
+    shard_completed = [False] * n_shards
+    stop_poller = threading.Event()
+
+    def _read_shard_games_done(shard_index: int) -> int:
+        gp_var = 4 * len(chunks[shard_index])
+        try:
+            text = log_paths[shard_index].read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            text = ""
+        return _games_done_from_shard_log(
+            text,
+            n_variants=n_variants,
+            games_per_variant=gp_var,
         )
+
+    def _emit_supervisor_from_logs() -> None:
+        shard_done_counts: list[int] = []
+        for i in range(n_shards):
+            if shard_completed[i]:
+                shard_done_counts.append(games_per_shard[i])
+            else:
+                shard_done_counts.append(_read_shard_games_done(i))
+        agg = sum(shard_done_counts)
+        elapsed = time.perf_counter() - t_batch
+        _emit_batch_supervisor_progress_block(
+            prog,
+            aggregate_done=agg,
+            total_games=total_games,
+            elapsed_s=elapsed,
+            eta_wall=eta_wall,
+            tty=tty_prog,
+            shard_done=shard_done_counts,
+            shard_total=games_per_shard,
+            est_per_shard=est_list,
+            n_shards=n_shards,
+            tty_state=tty_block_state,
+        )
+
+    _emit_supervisor_from_logs()
+
+    def _poller_loop() -> None:
+        while True:
+            if stop_poller.wait(timeout=BATCH_SUPERVISOR_POLL_INTERVAL_S):
+                break
+            with emit_lock:
+                _emit_supervisor_from_logs()
+
     with tempfile.TemporaryDirectory(dir=csv_path.parent) as tmpd:
         tmp_path = Path(tmpd)
         with ThreadPoolExecutor(max_workers=n_shards) as pool:
@@ -1128,19 +1246,18 @@ def run_sweep_batch(
                 pool.submit(run_one_shard, i, chunks[i], tmp_path, log_paths[i]): i
                 for i in range(n_shards)
             }
-            for fut in as_completed(futs):
-                shard_i = futs[fut]
-                fut.result()
-                games_done += games_per_shard[shard_i]
-                elapsed = time.perf_counter() - t_batch
-                _emit_batch_supervisor_progress(
-                    prog,
-                    games_done=games_done,
-                    total_games=total_games,
-                    elapsed_s=elapsed,
-                    eta_wall=eta_wall,
-                    tty=tty_prog,
-                )
+            poller = threading.Thread(target=_poller_loop, name="batch-supervisor-poll", daemon=True)
+            poller.start()
+            try:
+                for fut in as_completed(futs):
+                    shard_i = futs[fut]
+                    fut.result()
+                    with emit_lock:
+                        shard_completed[shard_i] = True
+                        _emit_supervisor_from_logs()
+            finally:
+                stop_poller.set()
+                poller.join(timeout=5.0)
     if tty_prog:
         prog.write("\n")
         prog.flush()

@@ -1,6 +1,9 @@
 """Pure path helpers for board highlights."""
 
+from motley_crews_env.state import initial_state
+
 from motley_crews_play.highlight_geometry import (
+    cells_along_arbalist_ray,
     charge_path_cells_exposed,
     l_shaped_path_cells,
     orthogonal_straight_segment_exposed,
@@ -28,3 +31,11 @@ def test_charge_straight() -> None:
 
 def test_charge_rejects_diagonal() -> None:
     assert charge_path_cells_exposed(2, 2, 3, 3) == set()
+
+
+def test_arbalist_ray_misaligned_target_terminates() -> None:
+    """Regression: stepping from (0,0) toward (2,1) never hits target; must not infinite-loop."""
+    gs = initial_state()
+    out = cells_along_arbalist_ray(gs, 0, 0, 2, 1)
+    assert len(out) < 50
+    assert (2, 1) in out or len(out) >= 1

@@ -345,9 +345,17 @@ def _advance_turn(s: GameState) -> None:
 
 # --- Action legality helpers -------------------------------------------
 
-def _actor_unit(state: GameState, team: int, slot: int) -> UnitState:
-    u = unit_at(state, team, slot)
-    if u is None or u.controller != state.current_player:
+def _actor_unit(
+    state: GameState,
+    pl: int,
+    actor_slot: int,
+    *,
+    actor_team: Optional[int] = None,
+) -> UnitState:
+    """``actor_team`` is roster side (0/1); ``None`` means figure lives on ``pl``'s roster."""
+    team = pl if actor_team is None else actor_team
+    u = unit_at(state, team, actor_slot)
+    if u is None or u.controller != pl:
         raise IllegalActionError("bad actor")
     return u
 
@@ -376,7 +384,9 @@ def _legal_basic_attacks_after_move(s: GameState) -> list[ActionIntent]:
                     oteam, osl = linear_to_team_slot(tid)
                     ou = unit_at(s, oteam, osl)
                     if ou is not None and ou.controller != pl:
-                        out.append(ActionBasicAttack(actor_slot=sl, target_square=(tr, tc)))
+                        out.append(
+                            ActionBasicAttack(actor_slot=sl, target_square=(tr, tc), actor_team=t)
+                        )
 
             elif cid in (int(ClassId.WHITE_MAGE), int(ClassId.BLACK_MAGE)):
                 for tr, tc in _iter_reach_squares_orthogonal(u.row, u.col, reach):
@@ -388,7 +398,9 @@ def _legal_basic_attacks_after_move(s: GameState) -> list[ActionIntent]:
                     oteam, osl = linear_to_team_slot(tid)
                     ou = unit_at(s, oteam, osl)
                     if ou is not None and ou.controller != pl:
-                        out.append(ActionBasicAttack(actor_slot=sl, target_square=(tr, tc)))
+                        out.append(
+                            ActionBasicAttack(actor_slot=sl, target_square=(tr, tc), actor_team=t)
+                        )
 
             elif cid == int(ClassId.ARBALIST):
                 targets = _iter_reach_squares_arbalist(u.row, u.col, reach)
@@ -401,7 +413,9 @@ def _legal_basic_attacks_after_move(s: GameState) -> list[ActionIntent]:
                     oteam, osl = linear_to_team_slot(tid)
                     ou = unit_at(s, oteam, osl)
                     if ou is not None and ou.controller != pl:
-                        out.append(ActionBasicAttack(actor_slot=sl, target_square=(tr, tc)))
+                        out.append(
+                            ActionBasicAttack(actor_slot=sl, target_square=(tr, tc), actor_team=t)
+                        )
     return out
 
 
@@ -437,6 +451,7 @@ def _legal_long_eye(s: GameState) -> list[ActionIntent]:
                                     actor_slot=sl,
                                     special_id=SpecialId.LONG_EYE,
                                     target_square=(cr, cc),
+                                    actor_team=t,
                                 )
                             )
                         break
@@ -470,6 +485,7 @@ def _legal_specials(s: GameState) -> list[ActionIntent]:
                                 actor_slot=sl,
                                 special_id=SpecialId.CHARGE,
                                 target_square=(tr, tc),
+                                actor_team=t,
                             )
                         )
 
@@ -490,6 +506,7 @@ def _legal_specials(s: GameState) -> list[ActionIntent]:
                                     actor_slot=sl,
                                     special_id=SpecialId.CONJURE_CONTAINMENT,
                                     target_square=(tr, tc),
+                                    actor_team=t,
                                 )
                             )
                 for tr, tc in _iter_reach_squares_orthogonal(u.row, u.col, reach):
@@ -502,7 +519,12 @@ def _legal_specials(s: GameState) -> list[ActionIntent]:
                     ou = unit_at(s, oteam, osl)
                     if ou is not None and ou.controller != pl and ou.hp <= 2:
                         out.append(
-                            ActionSpecial(actor_slot=sl, special_id=SpecialId.CONVERT, target_square=(tr, tc))
+                            ActionSpecial(
+                                actor_slot=sl,
+                                special_id=SpecialId.CONVERT,
+                                target_square=(tr, tc),
+                                actor_team=t,
+                            )
                         )
                 for tr, tc in _iter_reach_squares_orthogonal(u.row, u.col, reach):
                     if not _in_orthogonal_reach_wm_bm(s, u.row, u.col, tr, tc, reach):
@@ -514,7 +536,12 @@ def _legal_specials(s: GameState) -> list[ActionIntent]:
                     ou = unit_at(s, oteam, osl)
                     if ou is not None and ou.controller == pl and (oteam != t or osl != sl):
                         out.append(
-                            ActionSpecial(actor_slot=sl, special_id=SpecialId.HEAL, target_square=(tr, tc))
+                            ActionSpecial(
+                                actor_slot=sl,
+                                special_id=SpecialId.HEAL,
+                                target_square=(tr, tc),
+                                actor_team=t,
+                            )
                         )
 
             elif cid == int(ClassId.BLACK_MAGE):
@@ -535,6 +562,7 @@ def _legal_specials(s: GameState) -> list[ActionIntent]:
                                     special_id=SpecialId.CURSE,
                                     target_square=(tr, tc),
                                     curse_x=x,
+                                    actor_team=t,
                                 )
                             )
                 if not u.used_magic_bomb:
@@ -549,6 +577,7 @@ def _legal_specials(s: GameState) -> list[ActionIntent]:
                                     actor_slot=sl,
                                     special_id=SpecialId.MAGIC_BOMB,
                                     target_square=(tr, tc),
+                                    actor_team=t,
                                 )
                             )
                 for osl in range(FIGURES_PER_SIDE):
@@ -560,6 +589,7 @@ def _legal_specials(s: GameState) -> list[ActionIntent]:
                                 special_id=SpecialId.ANIMATE_DEAD,
                                 target_square=None,
                                 animate_dead_crew_slot=osl,
+                                actor_team=t,
                             )
                         )
 
@@ -571,7 +601,7 @@ def _resolve_basic_attack(
     s: GameState, a: ActionBasicAttack, damage_events: Optional[list[DamageEvent]] = None
 ) -> None:
     pl = s.current_player
-    u = _actor_unit(s, pl, a.actor_slot)
+    u = _actor_unit(s, pl, a.actor_slot, actor_team=a.actor_team)
     if u.containment_ticks > 0:
         raise IllegalActionError("contained")
     tid = s.board[a.target_square[0], a.target_square[1]]
@@ -602,7 +632,8 @@ def _resolve_charge(
     dest: tuple[int, int],
     damage_events: Optional[list[DamageEvent]] = None,
 ) -> None:
-    u = _actor_unit(s, actor_team, slot)
+    pl = s.current_player
+    u = _actor_unit(s, pl, slot, actor_team=actor_team)
     if u.class_id != int(ClassId.KNIGHT):
         raise IllegalActionError("class")
     if s.any_friendly_moved_this_turn:
@@ -639,13 +670,14 @@ def _resolve_special(
     heal_events: Optional[list[HealEvent]] = None,
 ) -> None:
     pl = s.current_player
-    u = _actor_unit(s, pl, sp.actor_slot)
+    u = _actor_unit(s, pl, sp.actor_slot, actor_team=sp.actor_team)
     sid = sp.special_id
+    actor_roster_team = pl if sp.actor_team is None else sp.actor_team
 
     if sid == SpecialId.CHARGE:
         if sp.target_square is None:
             raise IllegalActionError("charge target")
-        _resolve_charge(s, pl, sp.actor_slot, sp.target_square, damage_events=damage_events)
+        _resolve_charge(s, actor_roster_team, sp.actor_slot, sp.target_square, damage_events=damage_events)
         return
 
     if sid == SpecialId.LONG_EYE:
@@ -778,9 +810,7 @@ def _resolve_special(
         ou = unit_at(s, oteam, osl)
         if ou is None or ou.controller == pl:
             raise IllegalActionError("target")
-        su = unit_at(s, pl, sp.actor_slot)
-        if su is None:
-            raise IllegalActionError("self")
+        su = u
         su.hp -= x
         if damage_events is not None:
             damage_events.append(
@@ -788,7 +818,7 @@ def _resolve_special(
                     row=su.row,
                     col=su.col,
                     amount=x,
-                    target_team=pl,
+                    target_team=actor_roster_team,
                     target_slot=sp.actor_slot,
                 )
             )
@@ -801,7 +831,7 @@ def _resolve_special(
                 DamageEvent(row=ou.row, col=ou.col, amount=tdmg, target_team=oteam, target_slot=osl)
             )
         if su.hp <= 0:
-            _kill_unit(s, pl, sp.actor_slot)
+            _kill_unit(s, actor_roster_team, sp.actor_slot)
         if ou.hp <= 0:
             _kill_unit(s, oteam, osl)
         return
@@ -841,8 +871,10 @@ def _resolve_special(
             raise IllegalActionError("not dead")
         if not _has_empty_deploy_cell(s, pl):
             raise IllegalActionError("no space")
-        _apply_damage_to_unit(s, pl, sp.actor_slot, 1, source_class_for_fear=None, damage_events=damage_events)
-        if unit_at(s, pl, sp.actor_slot) is None:
+        _apply_damage_to_unit(
+            s, actor_roster_team, sp.actor_slot, 1, source_class_for_fear=None, damage_events=damage_events
+        )
+        if unit_at(s, actor_roster_team, sp.actor_slot) is None:
             return
         du.alive = True
         du.hp = 2
@@ -1021,15 +1053,16 @@ def _clone_apply_move(state: GameState, move: Optional[MoveIntent]) -> GameState
     if move is None:
         return s
     pl = s.current_player
-    u = unit_at(s, pl, move.actor_slot)
+    team = pl if move.actor_team is None else move.actor_team
+    u = unit_at(s, team, move.actor_slot)
     if u is None or u.controller != pl:
         raise IllegalActionError("move actor")
     if u.containment_ticks > 0:
         raise IllegalActionError("contained move")
     dest = move.destination
-    if dest not in _legal_destinations_for_unit(s, pl, move.actor_slot):
+    if dest not in _legal_destinations_for_unit(s, team, move.actor_slot):
         raise IllegalActionError("illegal dest")
-    _apply_move_only(s, pl, move.actor_slot, dest)
+    _apply_move_only(s, team, move.actor_slot, dest)
     return s
 
 
@@ -1053,9 +1086,10 @@ def legal_actions(state: GameState) -> list[TurnAction]:
     out: list[TurnAction] = []
     pl = state.current_player
     moves: list[Optional[MoveIntent]] = [None]
-    for sl in range(FIGURES_PER_SIDE):
-        for dest in _legal_destinations_for_unit(state, pl, sl):
-            moves.append(MoveIntent(actor_slot=sl, destination=dest))
+    for t in (TEAM_PLAYER_A, TEAM_PLAYER_B):
+        for sl in range(FIGURES_PER_SIDE):
+            for dest in _legal_destinations_for_unit(state, t, sl):
+                moves.append(MoveIntent(actor_slot=sl, destination=dest, actor_team=t))
 
     for mv in moves:
         try:
@@ -1069,6 +1103,7 @@ def legal_actions(state: GameState) -> list[TurnAction]:
         for ac in acts:
             key = [
                 type(ac).__name__,
+                getattr(ac, "actor_team", None),
                 getattr(ac, "actor_slot", None),
                 getattr(ac, "target_square", None),
             ]
@@ -1135,15 +1170,16 @@ def step(state: GameState, turn: TurnAction) -> StepResult:
         if turn.resurrect_place is not None:
             raise IllegalActionError("resurrect_place")
         if turn.move is not None:
-            u = unit_at(s, pl, turn.move.actor_slot)
+            team = pl if turn.move.actor_team is None else turn.move.actor_team
+            u = unit_at(s, team, turn.move.actor_slot)
             if u is None or u.controller != pl:
                 raise IllegalActionError("move")
             if u.containment_ticks > 0:
                 raise IllegalActionError("contained")
             dest = turn.move.destination
-            if dest not in _legal_destinations_for_unit(s, pl, turn.move.actor_slot):
+            if dest not in _legal_destinations_for_unit(s, team, turn.move.actor_slot):
                 raise IllegalActionError("dest")
-            _apply_move_only(s, pl, turn.move.actor_slot, dest)
+            _apply_move_only(s, team, turn.move.actor_slot, dest)
         _apply_action(s, turn.action, damage_events, heal_events)
     except IllegalActionError:
         raise

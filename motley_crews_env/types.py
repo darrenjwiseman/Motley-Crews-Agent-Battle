@@ -95,12 +95,16 @@ class MoveIntent:
 
     actor_slot: int
     destination: Coord
+    # Roster team (0/1) where the figure is stored; None means ``current_player`` (legacy default).
+    # Converted units stay on the opponent's roster while ``controller`` matches the current player.
+    actor_team: Optional[int] = None
 
 
 @dataclass(frozen=True, slots=True)
 class ActionBasicAttack:
     actor_slot: int
     target_square: Coord
+    actor_team: Optional[int] = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,6 +122,7 @@ class ActionSpecial:
     target_square: Optional[Coord] = None
     curse_x: Optional[int] = None
     animate_dead_crew_slot: Optional[int] = None
+    actor_team: Optional[int] = None
 
 
 ActionIntent = Union[ActionBasicAttack, ActionSpecial]

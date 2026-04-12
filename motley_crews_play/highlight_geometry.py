@@ -4,7 +4,10 @@ Pure geometry for board highlight paths (UI only; mirrors movement / LOS shapes 
 
 from __future__ import annotations
 
+from typing import Optional
+
 from motley_crews_env.constants import BOARD_SIZE
+from motley_crews_env.engine import preview_after_move
 from motley_crews_env.state import GameState, unit_at
 from motley_crews_env.types import ActionBasicAttack, ActionSpecial, ClassId, SpecialId, TurnAction
 
@@ -64,6 +67,8 @@ def cells_along_orthogonal_ray(ar: int, ac: int, tr: int, tc: int) -> set[tuple[
 def cells_along_arbalist_ray(
     state: GameState, ar: int, ac: int, tr: int, tc: int
 ) -> set[tuple[int, int]]:
+    """Cells along the arbalist shot line; bounded so bad inputs cannot spin forever."""
+    del state
     dist = max(abs(tr - ar), abs(tc - ac))
     if dist == 0:
         return {(ar, ac)}
@@ -73,13 +78,16 @@ def cells_along_arbalist_ray(
         return {(ar, ac), (tr, tc)}
     out: set[tuple[int, int]] = set()
     rr, cc = ar, ac
-    while True:
-        out.add((rr, cc))
-        if (rr, cc) == (tr, tc):
-            break
+    out.add((rr, cc))
+    for _ in range(dist):
         rr += dr
         cc += dc
-    return out
+        out.add((rr, cc))
+        if (rr, cc) == (tr, tc):
+            return out
+        if not (0 <= rr < BOARD_SIZE and 0 <= cc < BOARD_SIZE):
+            return out | {(tr, tc)}
+    return out | {(tr, tc)}
 
 
 def cells_along_long_eye_ray(state: GameState, ar: int, ac: int, tr: int, tc: int) -> set[tuple[int, int]]:
@@ -104,10 +112,20 @@ def cells_along_long_eye_ray(state: GameState, ar: int, ac: int, tr: int, tc: in
     return out
 
 
+def _roster_team_for_actor(pl: int, actor_team: Optional[int]) -> int:
+    return pl if actor_team is None else actor_team
+
+
 def path_cells_for_basic_attack(
-    state: GameState, pl: int, actor_slot: int, target: tuple[int, int]
+    state: GameState,
+    pl: int,
+    actor_slot: int,
+    target: tuple[int, int],
+    *,
+    actor_team: Optional[int] = None,
 ) -> set[tuple[int, int]]:
-    u = unit_at(state, pl, actor_slot)
+    team = _roster_team_for_actor(pl, actor_team)
+    u = unit_at(state, team, actor_slot)
     if u is None:
         return {target}
     ar, ac = u.row, u.col
@@ -126,7 +144,8 @@ def path_cells_for_basic_attack(
 def path_cells_for_special(
     state: GameState, pl: int, sp: ActionSpecial
 ) -> set[tuple[int, int]]:
-    u = unit_at(state, pl, sp.actor_slot)
+    team = _roster_team_for_actor(pl, sp.actor_team)
+    u = unit_at(state, team, sp.actor_slot)
     if u is None:
         return set()
     ar, ac = u.row, u.col
@@ -157,7 +176,9 @@ def path_cells_for_turn(state: GameState, pl: int, ta: TurnAction) -> set[tuple[
     """Highlight cells for the chosen path / line-of-fire for ``ta``."""
     # Move+action: phase B shows attack/special line only (move path already shown in move-only turns)
     if ta.move is not None and ta.action is None:
-        u = unit_at(state, pl, ta.move.actor_slot)
+        mi = ta.move
+        team = _roster_team_for_actor(pl, mi.actor_team)
+        u = unit_at(state, team, mi.actor_slot)
         if u is None:
             return set()
         r0, c0 = u.row, u.col
@@ -165,11 +186,15 @@ def path_cells_for_turn(state: GameState, pl: int, ta: TurnAction) -> set[tuple[
         return move_path_cells(r0, c0, r1, c1)
     if ta.action is None:
         return set()
+    # Use post-move positions for attack/special lines when the turn includes a move.
+    base = preview_after_move(state, ta.move) if ta.move is not None else state
     if isinstance(ta.action, ActionBasicAttack):
         ba = ta.action
-        return path_cells_for_basic_attack(state, pl, ba.actor_slot, ba.target_square)
+        return path_cells_for_basic_attack(
+            base, pl, ba.actor_slot, ba.target_square, actor_team=ba.actor_team
+        )
     assert isinstance(ta.action, ActionSpecial)
-    return path_cells_for_special(state, pl, ta.action)
+    return path_cells_for_special(base, pl, ta.action)
 
 
 def preview_emphasis_cells(state: GameState, pl: int, ta: TurnAction) -> set[tuple[int, int]]:

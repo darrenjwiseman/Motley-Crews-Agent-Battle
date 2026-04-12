@@ -24,9 +24,13 @@ def turn_action_to_tuple(action: TurnAction) -> tuple[Any, ...]:
 
         (move_part, action_part)
 
-    move_part: None | ("m", actor_slot, row, col)
+    move_part: None | ("m", actor_slot, row, col) | ("m", actor_slot, row, col, roster_team)
 
-    action_part: None | ("ba", actor_slot, row, col) | ("sp", spec_idx, actor_slot, tr, tc, curse_x, anim_slot)
+    action_part: None | ("ba", actor_slot, row, col) | ("ba", actor_slot, row, col, roster_team)
+        | ("sp", spec_idx, actor_slot, tr, tc, curse_x, anim_slot)
+        | ("sp", spec_idx, actor_slot, tr, tc, curse_x, anim_slot, roster_team)
+
+    ``roster_team`` is -1 when ``actor_team`` is None (figure on current player's roster).
 
     Use -1 for missing tr/tc (no square), curse_x, or anim_slot when not applicable.
     """
@@ -35,14 +39,16 @@ def turn_action_to_tuple(action: TurnAction) -> tuple[Any, ...]:
         move_part = None
     else:
         m = action.move
-        move_part = (_TAG_MOVE, m.actor_slot, m.destination[0], m.destination[1])
+        rt = -1 if m.actor_team is None else int(m.actor_team)
+        move_part = (_TAG_MOVE, m.actor_slot, m.destination[0], m.destination[1], rt)
 
     action_part: Any
     if action.action is None:
         action_part = None
     elif isinstance(action.action, ActionBasicAttack):
         a = action.action
-        action_part = (_TAG_BASIC, a.actor_slot, a.target_square[0], a.target_square[1])
+        rt = -1 if a.actor_team is None else int(a.actor_team)
+        action_part = (_TAG_BASIC, a.actor_slot, a.target_square[0], a.target_square[1], rt)
     else:
         a = action.action
         assert isinstance(a, ActionSpecial)
@@ -50,6 +56,7 @@ def turn_action_to_tuple(action: TurnAction) -> tuple[Any, ...]:
         tc = a.target_square[1] if a.target_square is not None else -1
         cx = a.curse_x if a.curse_x is not None else -1
         an = a.animate_dead_crew_slot if a.animate_dead_crew_slot is not None else -1
+        rt = -1 if a.actor_team is None else int(a.actor_team)
         action_part = (
             _TAG_SPECIAL,
             int(a.special_id),
@@ -58,6 +65,7 @@ def turn_action_to_tuple(action: TurnAction) -> tuple[Any, ...]:
             tc,
             cx,
             an,
+            rt,
         )
 
     if action.resurrect_place is not None:
@@ -87,9 +95,19 @@ def turn_action_from_tuple(data: tuple[Any, ...]) -> TurnAction:
 
     move: Optional[MoveIntent] = None
     if move_part is not None:
-        if not isinstance(move_part, tuple) or len(move_part) != 4 or move_part[0] != _TAG_MOVE:
+        if not isinstance(move_part, tuple) or move_part[0] != _TAG_MOVE:
             raise ValueError(f"Invalid move_part: {move_part!r}")
-        move = MoveIntent(actor_slot=int(move_part[1]), destination=(int(move_part[2]), int(move_part[3])))
+        if len(move_part) == 4:
+            move = MoveIntent(actor_slot=int(move_part[1]), destination=(int(move_part[2]), int(move_part[3])))
+        elif len(move_part) == 5:
+            rt = int(move_part[4])
+            move = MoveIntent(
+                actor_slot=int(move_part[1]),
+                destination=(int(move_part[2]), int(move_part[3])),
+                actor_team=None if rt < 0 else rt,
+            )
+        else:
+            raise ValueError(f"Invalid move_part length: {move_part!r}")
 
     action: Optional[ActionBasicAttack | ActionSpecial] = None
     if action_part is not None:
@@ -97,16 +115,28 @@ def turn_action_from_tuple(data: tuple[Any, ...]) -> TurnAction:
             raise ValueError(f"Invalid action_part: {action_part!r}")
         tag = action_part[0]
         if tag == _TAG_BASIC:
-            if len(action_part) != 4:
+            if len(action_part) == 4:
+                action = ActionBasicAttack(
+                    actor_slot=int(action_part[1]),
+                    target_square=(int(action_part[2]), int(action_part[3])),
+                )
+            elif len(action_part) == 5:
+                rt = int(action_part[4])
+                action = ActionBasicAttack(
+                    actor_slot=int(action_part[1]),
+                    target_square=(int(action_part[2]), int(action_part[3])),
+                    actor_team=None if rt < 0 else rt,
+                )
+            else:
                 raise ValueError("basic attack tuple length")
-            action = ActionBasicAttack(
-                actor_slot=int(action_part[1]),
-                target_square=(int(action_part[2]), int(action_part[3])),
-            )
         elif tag == _TAG_SPECIAL:
-            if len(action_part) != 7:
+            if len(action_part) not in (7, 8):
                 raise ValueError("special tuple length")
-            _, spec_idx, actor, tr, tc, cx, an = action_part
+            _, spec_idx, actor, tr, tc, cx, an = action_part[:7]
+            rt_sp: Optional[int] = None
+            if len(action_part) == 8:
+                rt_raw = int(action_part[7])
+                rt_sp = None if rt_raw < 0 else rt_raw
             ts: Optional[tuple[int, int]] = None
             if int(tr) >= 0 and int(tc) >= 0:
                 ts = (int(tr), int(tc))
@@ -116,6 +146,7 @@ def turn_action_from_tuple(data: tuple[Any, ...]) -> TurnAction:
                 target_square=ts,
                 curse_x=int(cx) if int(cx) >= 0 else None,
                 animate_dead_crew_slot=int(an) if int(an) >= 0 else None,
+                actor_team=rt_sp,
             )
         else:
             raise ValueError(f"Unknown action tag {tag!r}")
